@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
 import { SUPPORTED_LANGUAGES, type SupportedLanguage } from '@/constants/languages';
 import {
   API_BASE_URL,
@@ -22,25 +21,46 @@ import {
   type TranslationResponse,
 } from '@/services/api';
 
-type Mode = 'text' | 'speech';
-
 export default function HomeScreen() {
-  const [mode, setMode] = useState<Mode>('text');
   const [sourceLanguage, setSourceLanguage] = useState<SupportedLanguage>('English');
   const [targetLanguage, setTargetLanguage] = useState<SupportedLanguage>('Hindi');
   const [inputText, setInputText] = useState('');
-  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [outputText, setOutputText] = useState('');
+  const [latestAudioUrl, setLatestAudioUrl] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [result, setResult] = useState<TranslationResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isTranslatingText, setIsTranslatingText] = useState(false);
+  const [isTranslatingSpeech, setIsTranslatingSpeech] = useState(false);
 
-  const mediaRecorderRef = useRef<any>(null);
-  const chunksRef = useRef<any[]>([]);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
-  const canTranslate = useMemo(
-    () => (mode === 'text' ? inputText.trim().length > 0 : Boolean(recordingBlob)),
-    [inputText, mode, recordingBlob],
-  );
+  const canTranslateText = useMemo(() => inputText.trim().length > 0 && !isTranslatingSpeech, [inputText, isTranslatingSpeech]);
+
+  async function translateFromText() {
+    if (!inputText.trim()) return;
+
+    setIsTranslatingText(true);
+    try {
+      const response = await translateText({
+        text: inputText.trim(),
+        sourceLanguage,
+        targetLanguage,
+      });
+      applyTranslation(response);
+    } catch {
+      Alert.alert('Translation failed', `Unable to reach backend at ${API_BASE_URL}.`);
+    } finally {
+      setIsTranslatingText(false);
+    }
+  }
+
+  function applyTranslation(response: TranslationResponse) {
+    if (response.transcribed_text) {
+      setInputText(response.transcribed_text);
+    }
+    setOutputText(response.translated_text);
+    setLatestAudioUrl(response.audio_url ?? null);
+  }
 
   async function toggleRecording() {
     if (Platform.OS !== 'web') {
@@ -52,23 +72,40 @@ export default function HomeScreen() {
     }
 
     if (!isRecording) {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      chunksRef.current = [];
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const recorder = new MediaRecorder(stream);
+        chunksRef.current = [];
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
-      };
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) chunksRef.current.push(event.data);
+        };
 
-      recorder.onstop = () => {
-        setRecordingBlob(new Blob(chunksRef.current, { type: 'audio/webm' }));
-        stream.getTracks().forEach((track) => track.stop());
-      };
+        recorder.onstop = async () => {
+          stream.getTracks().forEach((track) => track.stop());
 
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setResult(null);
-      setIsRecording(true);
+          const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+          setIsTranslatingSpeech(true);
+          try {
+            const response = await translateSpeech({
+              audioBlob,
+              sourceLanguage,
+              targetLanguage,
+            });
+            applyTranslation(response);
+          } catch {
+            Alert.alert('Speech translation failed', `Unable to reach backend at ${API_BASE_URL}.`);
+          } finally {
+            setIsTranslatingSpeech(false);
+          }
+        };
+
+        recorder.start();
+        mediaRecorderRef.current = recorder;
+        setIsRecording(true);
+      } catch {
+        Alert.alert('Microphone permission required', 'Please allow microphone access to record speech.');
+      }
       return;
     }
 
@@ -76,111 +113,121 @@ export default function HomeScreen() {
     setIsRecording(false);
   }
 
-  async function runTranslation() {
-    setIsLoading(true);
-    try {
-      const response =
-        mode === 'text'
-          ? await translateText({ text: inputText.trim(), sourceLanguage, targetLanguage })
-          : await translateSpeech({ audioBlob: recordingBlob!, sourceLanguage, targetLanguage });
+  async function playOutputAudio() {
+    const absolute = toAbsoluteAudioUrl(latestAudioUrl);
 
-      setResult(response);
-      if (response.audio_url) await playAudio(response.audio_url);
-    } catch {
-      Alert.alert('Translation failed', `Unable to reach backend at ${API_BASE_URL}.`);
-    } finally {
-      setIsLoading(false);
+    if (!absolute) {
+      if (!outputText.trim()) {
+        Alert.alert('No output yet', 'Translate something first, then play the voice output.');
+        return;
+      }
+
+      try {
+        setIsTranslatingText(true);
+        const response = await translateText({
+          text: inputText.trim(),
+          sourceLanguage,
+          targetLanguage,
+        });
+        applyTranslation(response);
+        const generatedAudioUrl = toAbsoluteAudioUrl(response.audio_url);
+        if (generatedAudioUrl) {
+          await playAudio(generatedAudioUrl);
+        }
+      } catch {
+        Alert.alert('Voice output unavailable', `Unable to reach backend at ${API_BASE_URL}.`);
+      } finally {
+        setIsTranslatingText(false);
+      }
+
+      return;
     }
+
+    await playAudio(absolute);
   }
 
   async function playAudio(audioUrl: string) {
-    const absolute = toAbsoluteAudioUrl(audioUrl);
-    if (!absolute) return;
-
     if (Platform.OS === 'web') {
-      const audio = new Audio(absolute);
+      const audio = new Audio(audioUrl);
       await audio.play();
       return;
     }
 
-    await Linking.openURL(absolute);
+    await Linking.openURL(audioUrl);
+  }
+
+  function moveOutputToInput() {
+    if (!outputText.trim()) {
+      Alert.alert('No output to move', 'Translate first, then use the up arrow to move text back to input.');
+      return;
+    }
+
+    setInputText(outputText);
+    setOutputText('');
+    setLatestAudioUrl(null);
+    setSourceLanguage(targetLanguage);
+    setTargetLanguage(sourceLanguage);
   }
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <ThemedText type="title">Vaani Connect</ThemedText>
-      <ThemedText>Translate by text or speech, and get spoken output.</ThemedText>
+      <ThemedText style={styles.title}>Vaani Connect</ThemedText>
 
-      <View style={styles.segmentRow}>
-        {(['text', 'speech'] as const).map((currentMode) => (
-          <Pressable
-            key={currentMode}
-            style={[styles.segmentButton, mode === currentMode && styles.segmentActive]}
-            onPress={() => {
-              setMode(currentMode);
-              setResult(null);
-            }}>
-            <ThemedText style={mode === currentMode ? styles.segmentActiveText : undefined}>
-              {currentMode === 'text' ? 'Text Input' : 'Speech Input'}
-            </ThemedText>
-          </Pressable>
-        ))}
+      <View style={styles.recordRow}>
+        <Pressable
+          style={[styles.circleButton, isRecording && styles.circleButtonStop]}
+          onPress={toggleRecording}
+          disabled={isTranslatingSpeech || isTranslatingText}>
+          {isTranslatingSpeech ? <ActivityIndicator color="#0b1220" /> : null}
+        </Pressable>
+        <ThemedText style={styles.buttonLabel}>{isRecording ? 'Stop Recording' : 'Record Button'}</ThemedText>
       </View>
 
-      <LanguagePicker title="Source language" selected={sourceLanguage} onSelect={setSourceLanguage} />
-      <LanguagePicker title="Target language" selected={targetLanguage} onSelect={setTargetLanguage} />
+      <LanguagePicker title="Input Language" selected={sourceLanguage} onSelect={setSourceLanguage} />
+      <LanguagePicker title="Output Language" selected={targetLanguage} onSelect={setTargetLanguage} />
 
-      {mode === 'text' ? (
-        <ThemedView style={styles.card}>
-          <ThemedText type="defaultSemiBold">Enter text</ThemedText>
-          <TextInput
-            value={inputText}
-            onChangeText={setInputText}
-            placeholder="Type or paste text here"
-            multiline
-            style={styles.input}
-          />
-        </ThemedView>
-      ) : (
-        <ThemedView style={styles.card}>
-          <ThemedText type="defaultSemiBold">Record speech</ThemedText>
-          <Pressable
-            style={[styles.recordButton, isRecording && styles.stopButton]}
-            onPress={toggleRecording}>
-            <ThemedText style={styles.recordButtonText}>
-              {isRecording ? 'Stop Recording' : 'Start Recording'}
-            </ThemedText>
-          </Pressable>
-          <ThemedText>{recordingBlob ? 'Audio captured and ready.' : 'No audio recorded yet.'}</ThemedText>
-        </ThemedView>
-      )}
+      <View style={styles.textBox}>
+        <TextInput
+          value={inputText}
+          onChangeText={setInputText}
+          placeholder="Input Text Box"
+          placeholderTextColor="#8d8d8d"
+          multiline
+          style={styles.input}
+        />
+      </View>
 
-      <Pressable
-        onPress={runTranslation}
-        disabled={!canTranslate || isLoading}
-        style={[styles.translateButton, (!canTranslate || isLoading) && styles.disabledButton]}>
-        {isLoading ? <ActivityIndicator color="#fff" /> : <ThemedText style={styles.ctaText}>Translate</ThemedText>}
-      </Pressable>
+      <View style={styles.arrowRow}>
+        <Pressable style={styles.arrowButton} onPress={moveOutputToInput}>
+          <ThemedText style={styles.arrowText}>↑</ThemedText>
+        </Pressable>
+        <Pressable
+          style={[styles.arrowButton, (!canTranslateText || isTranslatingText) && styles.disabledButton]}
+          onPress={translateFromText}
+          disabled={!canTranslateText || isTranslatingText}>
+          {isTranslatingText ? <ActivityIndicator color="#f5f5f5" /> : <ThemedText style={styles.arrowText}>↓</ThemedText>}
+        </Pressable>
+      </View>
 
-      {result ? (
-        <ThemedView style={styles.resultCard}>
-          {result.transcribed_text ? (
-            <>
-              <ThemedText type="defaultSemiBold">Recognized speech</ThemedText>
-              <ThemedText>{result.transcribed_text}</ThemedText>
-            </>
-          ) : null}
+      <View style={styles.textBox}>
+        <TextInput
+          value={outputText}
+          editable={false}
+          placeholder="Out put Text Box"
+          placeholderTextColor="#8d8d8d"
+          multiline
+          style={[styles.input, styles.outputInput]}
+        />
+      </View>
 
-          <ThemedText type="defaultSemiBold">Translated text</ThemedText>
-          <ThemedText>{result.translated_text}</ThemedText>
+      <View style={styles.speakRow}>
+        <ThemedText style={styles.buttonLabel}>Speak Output button</ThemedText>
+        <Pressable style={styles.circleButton} onPress={playOutputAudio}>
+          <ThemedText style={styles.speakIcon}>▶</ThemedText>
+        </Pressable>
+      </View>
 
-          {result.audio_url ? (
-            <Pressable style={styles.playButton} onPress={() => playAudio(result.audio_url!)}>
-              <ThemedText style={styles.playText}>Play Voice Output</ThemedText>
-            </Pressable>
-          ) : null}
-        </ThemedView>
-      ) : null}
+      <ThemedText style={styles.footer}>All the credibilities</ThemedText>
     </ScrollView>
   );
 }
@@ -195,91 +242,145 @@ function LanguagePicker({
   onSelect: (language: SupportedLanguage) => void;
 }) {
   return (
-    <ThemedView style={styles.card}>
-      <ThemedText type="defaultSemiBold">{title}</ThemedText>
+    <View style={styles.languageBlock}>
+      <ThemedText style={styles.languageTitle}>{title}</ThemedText>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
         {SUPPORTED_LANGUAGES.map((language) => (
           <Pressable
             key={language}
             onPress={() => onSelect(language)}
             style={[styles.chip, selected === language && styles.chipActive]}>
-            <ThemedText style={selected === language ? styles.chipActiveText : undefined}>{language}</ThemedText>
+            <ThemedText style={[styles.chipLabel, selected === language && styles.chipLabelActive]}>{language}</ThemedText>
           </Pressable>
         ))}
       </ScrollView>
-    </ThemedView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  content: { padding: 16, gap: 12 },
-  segmentRow: { flexDirection: 'row', gap: 8 },
-  segmentButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 10,
-    paddingVertical: 10,
-    alignItems: 'center',
+  screen: { flex: 1, backgroundColor: '#000' },
+  content: {
+    paddingHorizontal: 24,
+    paddingTop: 44,
+    paddingBottom: 56,
+    gap: 18,
   },
-  segmentActive: { backgroundColor: '#222' },
-  segmentActiveText: { color: '#fff' },
-  card: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 12,
-    padding: 12,
-    gap: 10,
+  title: {
+    color: '#f5f5f5',
+    fontSize: 56,
+    lineHeight: 62,
+    fontWeight: '300',
+    letterSpacing: 0.3,
   },
-  chipRow: { flexDirection: 'row', gap: 8, paddingVertical: 2 },
-  chip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#bbb',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  chipActive: { backgroundColor: '#4f46e5', borderColor: '#4f46e5' },
-  chipActiveText: { color: '#fff' },
-  input: {
-    minHeight: 100,
-    borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 10,
-    padding: 10,
-    textAlignVertical: 'top',
-  },
-  recordButton: {
-    backgroundColor: '#0ea5e9',
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  stopButton: { backgroundColor: '#ef4444' },
-  recordButtonText: { color: '#fff', fontWeight: '700' },
-  translateButton: {
-    backgroundColor: '#16a34a',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  disabledButton: { opacity: 0.5 },
-  ctaText: { color: '#fff', fontWeight: '700' },
-  resultCard: {
-    borderWidth: 1,
-    borderColor: '#86efac',
-    borderRadius: 12,
-    padding: 12,
-    gap: 8,
-    marginBottom: 40,
-  },
-  playButton: {
+  recordRow: {
     marginTop: 6,
-    backgroundColor: '#1d4ed8',
-    borderRadius: 10,
-    paddingVertical: 10,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
   },
-  playText: { color: '#fff', fontWeight: '700' },
+  speakRow: {
+    marginTop: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+  circleButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#66b7f2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  circleButtonStop: { backgroundColor: '#f97316' },
+  buttonLabel: {
+    color: '#f5f5f5',
+    fontSize: 16,
+  },
+  textBox: {
+    minHeight: 164,
+    borderWidth: 2,
+    borderColor: '#ececec',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    justifyContent: 'center',
+  },
+  input: {
+    minHeight: 132,
+    color: '#f5f5f5',
+    fontSize: 36,
+    lineHeight: 42,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+  },
+  outputInput: {
+    opacity: 0.92,
+  },
+  arrowRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 24,
+  },
+  arrowButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#ececec',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  arrowText: {
+    color: '#f5f5f5',
+    fontSize: 40,
+    lineHeight: 40,
+    fontWeight: '500',
+  },
+  disabledButton: {
+    opacity: 0.4,
+  },
+  speakIcon: {
+    color: '#0b1220',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  footer: {
+    marginTop: 36,
+    marginBottom: 20,
+    color: '#f5f5f5',
+    alignSelf: 'flex-end',
+    fontSize: 20,
+  },
+  languageBlock: {
+    gap: 8,
+  },
+  languageTitle: {
+    color: '#f5f5f5',
+    fontSize: 13,
+    opacity: 0.85,
+  },
+  chipRow: {
+    gap: 10,
+    paddingBottom: 2,
+  },
+  chip: {
+    borderWidth: 1,
+    borderColor: '#4a4a4a',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  chipActive: {
+    backgroundColor: '#66b7f2',
+    borderColor: '#66b7f2',
+  },
+  chipLabel: {
+    color: '#f5f5f5',
+  },
+  chipLabelActive: {
+    color: '#071322',
+    fontWeight: '600',
+  },
 });
