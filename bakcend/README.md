@@ -124,6 +124,12 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
   Auto-cleanup TTL for generated audio files (default `3600`).
 - `VAANI_RECENT_METRICS_LIMIT`  
   Max number of in-memory metric events kept for `/metrics/recent` (default `100`).
+- `ASR_PROVIDER`  
+  ASR provider mode: `legacy` (default) or `indic_conformer_multi`.
+- `ASR_INDIC_CONFORMER_MODEL_ID`  
+  Hugging Face model id for IndicConformer multilingual provider (default `ai4bharat/indic-conformer-600m-multilingual`).
+- `ASR_INDIC_CONFORMER_DECODER`  
+  Decoder for IndicConformer provider: `ctc` (default) or `rnnt`.
 
 ---
 
@@ -135,6 +141,33 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 - `POST /translate/text`
 - `POST /translate/speech` (multipart with `audio`, `source_language`, `target_language`)
 - `GET /audio/{filename}`
+
+---
+
+## ASR language behavior
+
+- English uses Whisper directly.
+- Hindi/Telugu/Tamil/Bengali/Marathi prefer IndicWav2Vec models.
+- If IndicWav2Vec fails or returns empty output, backend falls back to Whisper.
+- Other languages use Whisper fallback:
+  - With forced language hint when available.
+  - With Whisper auto language detection when a hint mapping is unavailable.
+
+If `ASR_PROVIDER=indic_conformer_multi`:
+
+- Non-English requests try IndicConformer multilingual first.
+- On any IndicConformer failure, backend rolls back to the legacy ASR stack (IndicWav2Vec/Whisper).
+- English remains Whisper direct.
+
+Example (WSL/Linux/macOS shell):
+
+```bash
+export ASR_PROVIDER=indic_conformer_multi
+export ASR_INDIC_CONFORMER_DECODER=ctc
+uvicorn app.server:app --host 0.0.0.0 --port 8000
+```
+
+You can inspect route used per request via `/metrics/recent` (`asr.route` and `asr.model_id`).
 
 ---
 
@@ -220,6 +253,14 @@ Key artifacts:
 - `error_summary.csv`
 - `summary.json`
 - `summary.md`
+
+Generate presentation-ready graphs for any run folder:
+
+```bash
+python benchmark/render_presentation_graphs.py 20260310T021747Z-professional-demo
+```
+
+Charts are written to `benchmark/results/<run-folder>/plots/`.
 
 For larger runs, increase `VAANI_RECENT_METRICS_LIMIT` so all request IDs can join with backend metrics.
 

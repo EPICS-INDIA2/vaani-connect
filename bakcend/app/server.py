@@ -268,6 +268,18 @@ def _warmup_services() -> None:
     except Exception:  # noqa: BLE001 - warmup should not crash API startup.
         logger.exception("Translation warmup failed.")
 
+    # If IndicConformer provider is active, attempt model preload at startup.
+    asr_provider = getattr(asr_service, "asr_provider", None)
+    get_indic_conformer_model = getattr(asr_service, "_get_indic_conformer_model", None)
+    if asr_provider == "indic_conformer_multi" and callable(get_indic_conformer_model):
+        try:
+            get_indic_conformer_model()
+        except Exception:  # noqa: BLE001 - keep API startup resilient.
+            logger.exception(
+                "IndicConformer preload failed. ASR requests will roll back to legacy provider.",
+            )
+        return  # Skip legacy IndicWav2Vec warmup when IndicConformer provider is active.
+
     # Optionally preload selected Indic ASR models if helper is available.
     get_indic_asr = getattr(asr_service, "_get_indic_asr", None)
     if not callable(get_indic_asr):

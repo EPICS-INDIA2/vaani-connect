@@ -44,6 +44,36 @@ Results are stored at:
 
 Open `summary.md` for presentation slides and use the CSV files for charts.
 
+## Generate presentation-ready graphs
+
+Render graphs for one run by passing either the run folder name or full path:
+
+```bash
+python benchmark/render_presentation_graphs.py 20260310T021747Z-professional-demo
+```
+
+or
+
+```bash
+python benchmark/render_presentation_graphs.py /mnt/c/vaaniconnect9/vaani-connect/bakcend/benchmark/results/20260310T021747Z-professional-demo
+```
+
+This writes charts to:
+
+`benchmark/results/<run-folder>/plots/`
+
+Main files:
+
+- `01_kpi_overview.png`
+- `02_latency_percentiles.png`
+- `03_pair_p95_latency.png`
+- `04_pair_success_rate.png`
+- `05_route_distribution.png`
+- `06_error_distribution.png`
+- `07_client_vs_server_scatter.png`
+- `08_stage_latency_breakdown.png`
+- `presentation_graphs.md` (image index for quick copy/paste into slides)
+
 ## Dataset format
 
 CSV header:
@@ -58,3 +88,9 @@ CSV header:
 The backend keeps only recent metrics in memory (`VAANI_RECENT_METRICS_LIMIT`, default `100`).
 If your benchmark sends more successful requests than that limit, some internal metrics may not join to request rows.
 Increase the env var before running large benchmark rounds.
+
+If `matplotlib` is missing in your environment:
+
+```bash
+pip install matplotlib
+```
