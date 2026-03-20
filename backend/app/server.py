@@ -21,6 +21,7 @@ from pydantic import BaseModel  # Request body schema model.
 
 from app.languages import LANGUAGE_ALIASES, LANGUAGE_TO_CODE
 from app.main import build_services  # Builds translation + ASR services.
+from app.transliteration import normalize_text_for_translation
 from app.tts import tts_generate_with_metadata  # Converts translated text into speech audio.
 
 # Module logger for operational visibility.
@@ -511,14 +512,19 @@ def translate_text(
     target_language = _canonical_language_name(payload.target_language)
     src = LANGUAGE_TO_CODE[source_language]
     tgt = LANGUAGE_TO_CODE[target_language]
+    try:
+        normalized_input = normalize_text_for_translation(payload.text, source_language)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    source_text_for_translation = normalized_input.normalized_text
 
     translation_service, _ = get_services()  # Fetch lazily initialized services.
     translate_with_stats = getattr(translation_service, "translate_text_with_stats", None)
     if callable(translate_with_stats):
-        translated_text, translation_stats = translate_with_stats(payload.text, src, tgt)
+        translated_text, translation_stats = translate_with_stats(source_text_for_translation, src, tgt)
     else:
         translation_started = time.perf_counter()
-        translated_text = translation_service.translate_text(payload.text, src, tgt)
+        translated_text = translation_service.translate_text(source_text_for_translation, src, tgt)
         translation_stats = {
             "route": "unknown",
             "used_fallback": False,
@@ -544,8 +550,16 @@ def translate_text(
             "target_code": tgt,
             "include_speech": payload.include_speech,
             "input_chars": len(payload.text),
+            "normalized_input_chars": len(source_text_for_translation),
             "output_chars": len(translated_text),
             "input_bytes_utf8": len(payload.text.encode("utf-8")),
+            "normalized_source_text_changed": source_text_for_translation != payload.text,
+            "source_text_normalization": {
+                "source_script": normalized_input.source_script,
+                "is_romanized": normalized_input.is_romanized,
+                "transliteration_supported": normalized_input.transliteration_supported,
+                "transliteration_applied": normalized_input.transliteration_applied,
+            },
             "translation": translation_stats,
             "tts": tts_stats,
             "total_latency_ms": total_latency_ms,
@@ -555,6 +569,7 @@ def translate_text(
     return {
         "request_id": request_id,
         "source_text": payload.text,
+        "normalized_source_text": source_text_for_translation,
         "translated_text": translated_text,
         "audio_url": audio_url,
     }

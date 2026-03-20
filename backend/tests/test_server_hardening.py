@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import server
+from app.transliteration import NormalizedText
 
 
 class _DummyTranslationService:
@@ -190,6 +191,35 @@ class ServerHardeningTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(response.json()["audio_url"])
+
+    def test_translate_text_returns_normalized_source_text(self) -> None:
+        with patch.object(
+            server,
+            "normalize_text_for_translation",
+            return_value=NormalizedText(
+                text="mera naam rahul hai",
+                normalized_text="मेरा नाम राहुल है",
+                source_language="Hindi",
+                source_script="Deva",
+                is_romanized=True,
+                transliteration_applied=True,
+                transliteration_supported=True,
+            ),
+        ):
+            response = self.client.post(
+                "/translate/text",
+                json={
+                    "text": "mera naam rahul hai",
+                    "source_language": "Hindi",
+                    "target_language": "English",
+                    "include_speech": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["source_text"], "mera naam rahul hai")
+        self.assertEqual(body["normalized_source_text"], "मेरा नाम राहुल है")
 
     def test_translate_speech_survives_tts_failure(self) -> None:
         with patch.object(server, "tts_generate_with_metadata", side_effect=RuntimeError("tts offline")):
