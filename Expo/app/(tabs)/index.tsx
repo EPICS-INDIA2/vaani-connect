@@ -1,12 +1,19 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import {
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
-  Linking,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -22,6 +29,7 @@ import { Fonts } from '@/constants/theme';
 import { getUiCopy, UI_SUBTITLES } from '@/constants/ui-copy';
 import {
   API_BASE_URL,
+  createNativeAudioUpload,
   fetchSupportedLanguages,
   toAbsoluteAudioUrl,
   translateSpeech,
@@ -52,18 +60,18 @@ export default function HomeScreen() {
   const [inputText, setInputText] = useState('');
   const [outputText, setOutputText] = useState('');
   const [latestAudioUrl, setLatestAudioUrl] = useState<string | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
   const [isTranslatingText, setIsTranslatingText] = useState(false);
   const [isTranslatingSpeech, setIsTranslatingSpeech] = useState(false);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [languagePickerField, setLanguagePickerField] = useState<LanguageField | null>(null);
   const [languageQuery, setLanguageQuery] = useState('');
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
   const scrollRef = useRef<ScrollView | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const liftAnim = useRef(new Animated.Value(20)).current;
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder, 200);
+  const player = useAudioPlayer(null, { updateInterval: 200 });
+  const playerStatus = useAudioPlayerStatus(player);
 
   useEffect(() => {
     Animated.parallel([
@@ -102,6 +110,16 @@ export default function HomeScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    void setAudioModeAsync({
+      allowsRecording: false,
+      playsInSilentMode: true,
+      shouldPlayInBackground: false,
+      shouldRouteThroughEarpiece: false,
+      interruptionMode: 'duckOthers',
+    });
+  }, []);
+
   const activeRequest = isTranslatingText || isTranslatingSpeech;
   const canTranslateText = useMemo(
     () => inputText.trim().length > 0 && !isTranslatingSpeech,
@@ -109,6 +127,8 @@ export default function HomeScreen() {
   );
   const compactLayout = width < 410;
   const ui = useMemo(() => getUiCopy(sourceLanguage), [sourceLanguage]);
+  const isRecording = recorderState.isRecording;
+  const isPlayingAudio = playerStatus.playing || playerStatus.isBuffering;
   const statusTone = isRecording
     ? { color: DANGER, label: ui.statusListening }
     : activeRequest
@@ -145,6 +165,10 @@ export default function HomeScreen() {
   }
 
   function applyTranslation(response: TranslationResponse) {
+    if (playerStatus.playing) {
+      player.pause();
+    }
+
     if (response.transcribed_text) {
       setInputText(response.transcribed_text);
     }
@@ -158,43 +182,27 @@ export default function HomeScreen() {
   }
 
   async function toggleRecording() {
-    if (Platform.OS !== 'web') {
-      Alert.alert(ui.alertWebNeededTitle, ui.alertWebNeededMessage);
-      return;
-    }
-
     if (!isRecording) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const recorder = new MediaRecorder(stream);
-        chunksRef.current = [];
+        const permission = await requestRecordingPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert(ui.alertMicPermissionTitle, ui.alertMicPermissionMessage);
+          return;
+        }
 
-        recorder.ondataavailable = (event) => {
-          if (event.data.size > 0) chunksRef.current.push(event.data);
-        };
+        if (playerStatus.playing) {
+          player.pause();
+        }
 
-        recorder.onstop = async () => {
-          stream.getTracks().forEach((track) => track.stop());
-
-          const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
-          setIsTranslatingSpeech(true);
-          try {
-            const response = await translateSpeech({
-              audioBlob,
-              sourceLanguage,
-              targetLanguage,
-            });
-            applyTranslation(response);
-          } catch {
-            Alert.alert(ui.alertSpeechFailedTitle, API_BASE_URL);
-          } finally {
-            setIsTranslatingSpeech(false);
-          }
-        };
-
-        recorder.start();
-        mediaRecorderRef.current = recorder;
-        setIsRecording(true);
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+          shouldPlayInBackground: false,
+          shouldRouteThroughEarpiece: false,
+          interruptionMode: 'duckOthers',
+        });
+        await recorder.prepareToRecordAsync();
+        recorder.record();
       } catch {
         Alert.alert(ui.alertMicPermissionTitle, ui.alertMicPermissionMessage);
       }
@@ -202,8 +210,33 @@ export default function HomeScreen() {
       return;
     }
 
-    mediaRecorderRef.current?.stop();
-    setIsRecording(false);
+    setIsTranslatingSpeech(true);
+    try {
+      await recorder.stop();
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+        interruptionMode: 'duckOthers',
+      });
+
+      const recordedUri = recorder.uri ?? recorder.getStatus().url;
+      if (!recordedUri) {
+        throw new Error('Recording URI unavailable');
+      }
+
+      const response = await translateSpeech({
+        audioFile: createNativeAudioUpload(recordedUri),
+        sourceLanguage,
+        targetLanguage,
+      });
+      applyTranslation(response);
+    } catch {
+      Alert.alert(ui.alertSpeechFailedTitle, API_BASE_URL);
+    } finally {
+      setIsTranslatingSpeech(false);
+    }
   }
 
   async function playOutputAudio() {
@@ -240,17 +273,18 @@ export default function HomeScreen() {
   }
 
   async function playAudio(audioUrl: string) {
-    setIsPlayingAudio(true);
     try {
-      if (Platform.OS === 'web') {
-        const audio = new Audio(audioUrl);
-        await audio.play();
-        return;
-      }
-
-      await Linking.openURL(audioUrl);
-    } finally {
-      setIsPlayingAudio(false);
+      await setAudioModeAsync({
+        allowsRecording: false,
+        playsInSilentMode: true,
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+        interruptionMode: 'duckOthers',
+      });
+      player.replace({ uri: audioUrl });
+      player.play();
+    } catch {
+      Alert.alert(ui.alertVoiceUnavailableTitle, API_BASE_URL);
     }
   }
 

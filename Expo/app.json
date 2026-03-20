@@ -1,17 +1,25 @@
 {
   "expo": {
-    "name": "vaaniconnect8",
-    "slug": "vaaniconnect8",
+    "name": "Vaani Connect",
+    "slug": "vaani-connect",
     "version": "1.0.0",
+    "description": "Speech and text translation across Indian languages with generated voice playback.",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "vaaniconnect8",
+    "scheme": "vaaniconnect",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vaaniconnect.app",
+      "buildNumber": "1"
     },
     "android": {
+      "package": "com.vaaniconnect.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -27,6 +35,13 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Vaani Connect to access your microphone so you can record speech for translation.",
+          "recordAudioAndroid": true
+        }
+      ],
       [
         "expo-splash-screen",
         {

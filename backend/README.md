@@ -46,7 +46,7 @@ sudo apt install -y python3.11 python3.11-venv python3.11-dev
 ### 3) Create virtual environment with Python 3.11
 
 ```bash
-cd /workspace/vaani-connect/bakcend
+cd /workspace/vaani-connect/backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 python --version
@@ -91,7 +91,7 @@ Use the exact same commands as Option A in your normal terminal.
 ### Windows PowerShell (no WSL)
 
 1. Install Python 3.11 from: <https://www.python.org/downloads/release/python-3110/>
-2. Open PowerShell in `bakcend` folder.
+2. Open PowerShell in `backend` folder.
 3. Run:
 
 ```powershell
@@ -123,6 +123,10 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
   Max upload size for speech translation (default `10485760`, i.e. 10 MB).
 - `VAANI_AUDIO_TTL_SECONDS`  
   Auto-cleanup TTL for generated audio files (default `3600`).
+- `VAANI_AUDIO_URL_SECRET`  
+  Optional HMAC secret for signing generated `/audio/...` URLs.
+- `VAANI_AUDIO_URL_TTL_SECONDS`  
+  Lifetime in seconds for signed audio links when `VAANI_AUDIO_URL_SECRET` is enabled (default `300`).
 - `VAANI_RECENT_METRICS_LIMIT`  
   Max number of in-memory metric events kept for `/metrics/recent` (default `100`).
 - `VAANI_TTS_PROVIDER`  
@@ -143,6 +147,7 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 ## API endpoints
 
 - `GET /health`
+- `GET /ready`
 - `GET /languages`
 - `GET /metrics/recent` (debug endpoint for recent backend metrics)
 - `POST /translate/text`
@@ -269,7 +274,7 @@ Files:
 - `benchmark/datasets/presentation_text_cases.csv`
 - `benchmark/README.md`
 
-Run from `bakcend/`:
+Run from `backend/`:
 
 ```bash
 python benchmark/run_api_benchmark.py \

@@ -1,5 +1,7 @@
 from __future__ import annotations  # Postpone evaluation of type hints until runtime.
 
+import hashlib
+import hmac
 import json
 import logging  # Standard logging for startup/warmup diagnostics.
 import os  # OS/environment/file helpers.
@@ -109,6 +111,10 @@ RATE_LIMIT_WINDOW_SECONDS = _env_int("VAANI_RATE_LIMIT_WINDOW_SECONDS", 60)
 MAX_UPLOAD_BYTES = _env_int("VAANI_MAX_UPLOAD_BYTES", 10 * 1024 * 1024)
 # Generated audio lifetime in seconds before cleanup.
 AUDIO_TTL_SECONDS = _env_int("VAANI_AUDIO_TTL_SECONDS", 60 * 60)
+# Optional HMAC secret used to sign generated audio URLs.
+AUDIO_URL_SECRET = os.getenv("VAANI_AUDIO_URL_SECRET")
+# Lifetime for signed audio URLs when signing is enabled.
+AUDIO_URL_TTL_SECONDS = _env_int("VAANI_AUDIO_URL_TTL_SECONDS", 5 * 60)
 # Allowed CORS origins.
 ALLOWED_ORIGINS = _env_csv("VAANI_ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS)
 # CORS credential support cannot be true with wildcard origin.
@@ -278,6 +284,39 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _sign_audio_url(filename: str, expires: int) -> str:
+    secret = AUDIO_URL_SECRET
+    if not secret:
+        raise RuntimeError("Audio URL signing secret is not configured")
+
+    message = f"{filename}:{expires}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def _build_audio_url(filename: str) -> str:
+    base_path = f"/audio/{filename}"
+    if not AUDIO_URL_SECRET:
+        return base_path
+
+    expires = int(time.time()) + max(1, AUDIO_URL_TTL_SECONDS)
+    signature = _sign_audio_url(filename, expires)
+    return f"{base_path}?expires={expires}&signature={signature}"
+
+
+def _require_valid_audio_signature(filename: str, expires: int | None, signature: str | None) -> None:
+    if not AUDIO_URL_SECRET:
+        return
+
+    if expires is None or not signature:
+        raise HTTPException(status_code=403, detail="Missing audio signature")
+    if expires < int(time.time()):
+        raise HTTPException(status_code=403, detail="Audio link expired")
+
+    expected = _sign_audio_url(filename, expires)
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=403, detail="Invalid audio signature")
+
+
 def _log_metrics(event: str, payload: dict[str, Any]) -> None:
     record = {
         "event": event,
@@ -316,7 +355,7 @@ def _persist_audio_file(tts_path: str) -> str:
         shutil.copyfile(tts_path, stable_path)  # Move output into stable publicly served location.
     finally:
         _safe_unlink(tts_path)  # Always remove temporary original file.
-    return f"/audio/{audio_id}"  # Public API URL for client to fetch.
+    return _build_audio_url(audio_id)  # Public API URL for client to fetch.
 
 
 # Validate uploaded audio file extension and content type.
@@ -412,6 +451,23 @@ def startup_warmup() -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready() -> dict[str, Any]:
+    if _service_init_error is not None:
+        raise HTTPException(status_code=503, detail=_service_init_error)
+
+    try:
+        get_services()
+    except HTTPException as exc:
+        raise HTTPException(status_code=503, detail=exc.detail) from exc
+
+    return {
+        "status": "ready",
+        "warmup_enabled": ENABLE_STARTUP_WARMUP,
+        "audio_url_signing_enabled": bool(AUDIO_URL_SECRET),
+    }
 
 
 # Return supported language names for UI dropdowns.
@@ -623,9 +679,14 @@ def translate_speech(
 
 # Serve generated audio files by filename.
 @app.get("/audio/{filename}")
-def get_audio(filename: str):
+def get_audio(
+    filename: str,
+    expires: int | None = None,
+    signature: str | None = None,
+):
     _cleanup_expired_audio_files()  # Cleanup old files before serving.
     path = _safe_audio_path(filename)  # Validate path to avoid traversal.
+    _require_valid_audio_signature(filename, expires, signature)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Audio not found")
     return FileResponse(path, media_type=SERVED_AUDIO_MEDIA_TYPES[path.suffix.lower()])

@@ -1,0 +1,39 @@
+name: Expo Verify
+
+on:
+  push:
+    paths:
+      - "Expo/**"
+      - ".github/workflows/expo-verify.yml"
+  pull_request:
+    paths:
+      - "Expo/**"
+      - ".github/workflows/expo-verify.yml"
+
+jobs:
+  expo-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Expo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: Expo/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck

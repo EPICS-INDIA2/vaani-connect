@@ -132,8 +132,8 @@ export default function BackendHelpScreen() {
           <ThemedText style={styles.sectionTitle}>Local setup notes</ThemedText>
           <View style={styles.noteCard}>
             <NoteRow icon="terminal" text="Run the Python backend on port 8000, or point the app at another URL with EXPO_PUBLIC_API_BASE_URL." />
-            <NoteRow icon="language" text="Use Expo Web when you want microphone capture in the current frontend build." />
-            <NoteRow icon="graphic-eq" text="Typed translation and translated audio playback still work across platforms when the backend is available." />
+            <NoteRow icon="mic" text="Native microphone recording now works in Expo builds once the app has microphone permission." />
+            <NoteRow icon="graphic-eq" text="Use EXPO_PUBLIC_API_KEY only for protected internal environments. Public production auth still needs a safer backend-issued client strategy." />
           </View>
         </View>
       </ScrollView>

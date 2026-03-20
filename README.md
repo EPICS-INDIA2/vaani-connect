@@ -1,9 +1,21 @@
 # Vaani Connect
 
+## Purpose
+
+Vaani Connect is being built as a practical translation app for people in India who are not fluent in multiple regional languages. The goal is to make everyday communication easier by supporting speech and text translation across Indian languages and dialects in a mobile-first experience.
+
+The final product target is a usable, reliable app for real users, with primary focus on Android availability and accessibility in day-to-day scenarios.
+
+---
+
 This project has 2 parts:
 
-- `bakcend/` → Python backend (speech + translation API)
+- `backend/` → Python backend (speech + translation API)
 - `Expo/` → Mobile/web frontend (Expo React Native app)
+
+Release planning checklist:
+
+- `PUBLISHABILITY_CHECKLIST.md` -> tracked steps for turning the demo into a publishable mobile app
 
 If you are brand new, follow this guide from top to bottom.
 
@@ -52,7 +64,7 @@ sudo apt install -y python3.11 python3.11-venv python3.11-dev
 ### 3) Go to the backend folder and create a Python 3.11 virtual environment
 
 ```bash
-cd /workspace/vaani-connect/bakcend
+cd /workspace/vaani-connect/backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 python --version
@@ -103,7 +115,7 @@ Use the same backend steps as above, but run them in your normal terminal (no WS
 ### Windows (without WSL)
 
 1. Install **Python 3.11** from: <https://www.python.org/downloads/release/python-3110/>
-2. Open PowerShell in `bakcend` folder.
+2. Open PowerShell in `backend` folder.
 3. Create and activate venv:
 
 ```powershell
@@ -160,8 +172,8 @@ curl http://localhost:8000/health
 ## Helpful notes
 
 - Folder name is intentionally `backend/` in this repository.
-- Backend observability details (VAANI_METRICS logs + `/metrics/recent`) are documented in `bakcend/README.md`.
-- Professional benchmark harness docs are in `bakcend/benchmark/README.md`.
+- Backend observability details (VAANI_METRICS logs + `/metrics/recent`) are documented in `backend/README.md`.
+- Professional benchmark harness docs are in `backend/benchmark/README.md`.
 - Optional Indic Parler-TTS sidecar docs are in `backend/tts_sidecar/README.md`.
 - You can launch the recommended dev stack with one command instead of starting each service manually:
 
@@ -210,4 +222,10 @@ powershell -ExecutionPolicy Bypass -File .\tools\uninstall-changelog-agent-sched
 
 ```bash
 python -m app.main
+```
+
+- On Windows PowerShell or in the Codex terminal, use the PowerShell release wrapper instead of double-clicking the shell script:
+
+```powershell
+.\release.ps1 patch "your commit message"
 ```

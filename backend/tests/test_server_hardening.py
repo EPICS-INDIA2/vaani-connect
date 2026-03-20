@@ -55,6 +55,8 @@ class ServerHardeningTests(unittest.TestCase):
             patch.object(server, "RATE_LIMIT_WINDOW_SECONDS", 60),
             patch.object(server, "MAX_UPLOAD_BYTES", 32),
             patch.object(server, "AUDIO_TTL_SECONDS", 3600),
+            patch.object(server, "AUDIO_URL_SECRET", None),
+            patch.object(server, "AUDIO_URL_TTL_SECONDS", 300),
         ]
 
         for patcher in self._patchers:
@@ -84,6 +86,26 @@ class ServerHardeningTests(unittest.TestCase):
         path.write_bytes(b"fake-wav")
 
         response = self.client.get("/audio/clip.wav")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "audio/wav")
+
+    def test_get_audio_requires_signature_when_signing_enabled(self) -> None:
+        path = self.audio_dir / "clip.wav"
+        path.write_bytes(b"fake-wav")
+
+        with patch.object(server, "AUDIO_URL_SECRET", "signing-secret"):
+            response = self.client.get("/audio/clip.wav")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_audio_accepts_valid_signature_when_signing_enabled(self) -> None:
+        path = self.audio_dir / "clip.wav"
+        path.write_bytes(b"fake-wav")
+
+        with patch.object(server, "AUDIO_URL_SECRET", "signing-secret"):
+            signed_url = server._build_audio_url("clip.wav")
+            response = self.client.get(signed_url)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "audio/wav")
@@ -136,6 +158,25 @@ class ServerHardeningTests(unittest.TestCase):
         filename = audio_url.split("/")[-1]
         self.assertTrue((self.audio_dir / filename).exists())
 
+    def test_translate_text_returns_signed_audio_url_when_enabled(self) -> None:
+        with patch.object(server, "AUDIO_URL_SECRET", "signing-secret"):
+            response = self.client.post(
+                "/translate/text",
+                json={
+                    "text": "hello",
+                    "source_language": "English",
+                    "target_language": "Hindi",
+                    "include_speech": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        audio_url = response.json()["audio_url"]
+        self.assertIsNotNone(audio_url)
+        assert audio_url is not None
+        self.assertIn("expires=", audio_url)
+        self.assertIn("signature=", audio_url)
+
     def test_translate_text_survives_tts_failure(self) -> None:
         payload = {
             "text": "hello",
@@ -177,6 +218,12 @@ class ServerHardeningTests(unittest.TestCase):
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 429)
+
+    def test_ready_endpoint_reports_ready(self) -> None:
+        response = self.client.get("/ready")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ready")
 
 
 if __name__ == "__main__":
