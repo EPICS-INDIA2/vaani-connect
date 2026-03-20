@@ -171,7 +171,7 @@ class ASRLanguageFallbackTests(unittest.TestCase):
         self.assertEqual(stats["route"], "indicwav2vec_whisper_fallback")
         mock_prepare.assert_called_once_with("dummy.wav", target_sr=16000)
         self.assertEqual(mock_indic.call_args.kwargs["prepared_audio"], ("prepared-audio", 16000))
-        self.assertEqual(mock_whisper.call_args.kwargs["prepared_audio"], ("prepared-audio", 16000))
+        mock_whisper.assert_not_called()
 
 
 if __name__ == "__main__":

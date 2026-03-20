@@ -20,6 +20,16 @@ Copy this block for each update:
 
 ---
 
+## 2026-03-20 - Fixed Backend CI Test Expectation
+
+- Area: Backend
+- Summary: Fixed a failing ASR unit test in GitHub Actions by correcting the mocked fallback expectation. The test was asserting that Whisper ran even though the mocked Indic fallback path already returned the final transcription.
+- Files: `backend/tests/test_asr_language_fallback.py`, `CHANGELOG.md`
+- Commands Run: None
+- Validation: Aligned the test assertion with the mocked control flow so `test_transcribe_with_stats_preloads_audio_once_for_fallback_paths` no longer dereferences a missing Whisper mock call.
+- Notes/Risks: This only fixes the test expectation; it does not change backend runtime behavior.
+- Next Step: Re-run `backend-tests.yml` in GitHub to confirm the workflow is green.
+
 ## 2026-03-20 - Reduced Speech Translation Latency
 
 - Area: Full Stack
