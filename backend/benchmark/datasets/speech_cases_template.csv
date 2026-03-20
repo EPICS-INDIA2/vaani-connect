@@ -1,0 +1,3 @@
+case_id,source_language,target_language,audio_path,include_speech
+speech-001,Hindi,English,./audio/sample-hindi.wav,false
+speech-002,English,Telugu,./audio/sample-english.wav,true

@@ -76,3 +76,13 @@ Copy this block for each update:
 - Validation: Added PID and log tracking for each service, plus matching VS Code tasks for start/stop workflows.
 - Notes/Risks: The launcher expects the backend WSL virtual environment at `backend/.venv` and uses the sidecar automatically only when `backend/tts_sidecar/.venv` exists.
 - Next Step: Run the new launcher, confirm the stack comes up end-to-end, and inspect `.git/dev-stack/` logs if any service fails during boot.
+
+## 2026-03-20 - Added Speech Benchmark Harness
+
+- Area: Backend
+- Summary: Added `benchmark/run_speech_benchmark.py` to benchmark `/translate/speech` with local audio fixtures, backend metrics joins, and request-level CSV/summary outputs.
+- Files: `backend/benchmark/run_speech_benchmark.py`, `backend/benchmark/datasets/speech_cases_template.csv`, `backend/benchmark/README.md`, `CHANGELOG.md`
+- Commands Run: `wsl.exe bash -lc "cd '/mnt/c/vaaniconnect9/vaani-connect/backend' && source .venv/bin/activate && python -m py_compile benchmark/run_speech_benchmark.py"`
+- Validation: The new script compiled successfully in the backend WSL environment.
+- Notes/Risks: The template dataset references placeholder audio fixture paths; replace them with real files before running the harness.
+- Next Step: Add a small set of representative speech fixtures and run the new harness against a warm backend to capture p50/p95 latency.

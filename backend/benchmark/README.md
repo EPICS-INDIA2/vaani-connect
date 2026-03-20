@@ -94,3 +94,27 @@ If `matplotlib` is missing in your environment:
 ```bash
 pip install matplotlib
 ```
+
+## Speech benchmark
+
+Use `benchmark/run_speech_benchmark.py` to benchmark `POST /translate/speech` with local audio fixtures instead of timing requests manually in the app.
+
+Example:
+
+```bash
+python benchmark/run_speech_benchmark.py \
+  --base-url http://localhost:8000 \
+  --dataset benchmark/datasets/speech_cases_template.csv \
+  --runs-per-case 5 \
+  --concurrency 1 \
+  --tag speech-demo
+```
+
+Speech dataset header:
+
+`case_id,source_language,target_language,audio_path,include_speech`
+
+Notes:
+- `audio_path` is required.
+- Relative `audio_path` values resolve from the dataset file location.
+- The script emits request-level CSV, summary JSON/Markdown, translation route summary, and ASR route summary.
