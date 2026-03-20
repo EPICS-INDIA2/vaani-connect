@@ -155,6 +155,7 @@ export default function HomeScreen() {
         text: inputText.trim(),
         sourceLanguage,
         targetLanguage,
+        includeSpeech: false,
       });
       applyTranslation(response);
     } catch {
@@ -230,6 +231,7 @@ export default function HomeScreen() {
         audioFile: createNativeAudioUpload(recordedUri),
         sourceLanguage,
         targetLanguage,
+        includeSpeech: false,
       });
       applyTranslation(response);
     } catch {
@@ -254,6 +256,7 @@ export default function HomeScreen() {
           text: inputText.trim(),
           sourceLanguage,
           targetLanguage,
+          includeSpeech: true,
         });
         applyTranslation(response);
         const generatedAudioUrl = toAbsoluteAudioUrl(response.audio_url);

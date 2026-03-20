@@ -86,29 +86,38 @@ class ASRLanguageFallbackTests(unittest.TestCase):
 
     def test_transcribe_with_stats_marks_autodetect_for_long_tail_language(self) -> None:
         service = self._build_service()
-        with patch.object(service, "_whisper_transcribe", return_value="hello from bodo") as mock_whisper:
+        with (
+            patch.object(service, "_prepare_audio_input", return_value=("prepared-audio", 16000)),
+            patch.object(service, "_whisper_transcribe", return_value="hello from bodo") as mock_whisper,
+        ):
             text, stats = service.transcribe_with_stats("dummy.wav", "Bodo")
 
         self.assertEqual(text, "hello from bodo")
         self.assertEqual(stats["route"], "whisper_fallback_autodetect")
         self.assertFalse(stats["language_hint_applied"])
-        mock_whisper.assert_called_once_with("dummy.wav", "Bodo")
+        self.assertEqual(mock_whisper.call_args.args, ("dummy.wav", "Bodo"))
+        self.assertEqual(mock_whisper.call_args.kwargs["prepared_audio"], ("prepared-audio", 16000))
 
     def test_transcribe_with_stats_marks_hinted_for_supported_whisper_language(self) -> None:
         service = self._build_service()
-        with patch.object(service, "_whisper_transcribe", return_value="hello from urdu") as mock_whisper:
+        with (
+            patch.object(service, "_prepare_audio_input", return_value=("prepared-audio", 16000)),
+            patch.object(service, "_whisper_transcribe", return_value="hello from urdu") as mock_whisper,
+        ):
             text, stats = service.transcribe_with_stats("dummy.wav", "Urdu")
 
         self.assertEqual(text, "hello from urdu")
         self.assertEqual(stats["route"], "whisper_fallback_hinted")
         self.assertTrue(stats["language_hint_applied"])
-        mock_whisper.assert_called_once_with("dummy.wav", "Urdu")
+        self.assertEqual(mock_whisper.call_args.args, ("dummy.wav", "Urdu"))
+        self.assertEqual(mock_whisper.call_args.kwargs["prepared_audio"], ("prepared-audio", 16000))
 
     def test_indic_conformer_provider_runs_first_then_rolls_back(self) -> None:
         service = self._build_service()
         service.asr_provider = "indic_conformer_multi"
 
         with (
+            patch.object(service, "_prepare_audio_input", return_value=("prepared-audio", 16000)),
             patch.object(service, "_indic_conformer_transcribe", side_effect=RuntimeError("boom")) as mock_conformer,
             patch.object(
                 service,
@@ -131,8 +140,38 @@ class ASRLanguageFallbackTests(unittest.TestCase):
         self.assertEqual(text, "fallback text")
         self.assertEqual(stats["provider"], "indic_conformer_multi")
         self.assertTrue(stats["route"].startswith("indic_conformer_multi_rollback_to_"))
-        mock_conformer.assert_called_once_with("dummy.wav", "Urdu")
+        self.assertEqual(mock_conformer.call_args.args, ("dummy.wav", "Urdu"))
+        self.assertEqual(mock_conformer.call_args.kwargs["prepared_audio"], ("prepared-audio", 16000))
         self.assertEqual(mock_legacy.call_count, 1)
+        self.assertEqual(mock_legacy.call_args.kwargs["prepared_audio"], ("prepared-audio", 16000))
+
+    def test_transcribe_with_stats_preloads_audio_once_for_fallback_paths(self) -> None:
+        service = self._build_service()
+
+        with (
+            patch.object(
+                service,
+                "_prepare_audio_input",
+                return_value=("prepared-audio", 16000),
+            ) as mock_prepare,
+            patch.object(
+                service,
+                "_indicwav2vec_transcribe",
+                return_value=("fallback text", True),
+            ) as mock_indic,
+            patch.object(
+                service,
+                "_whisper_transcribe",
+                return_value="fallback text",
+            ) as mock_whisper,
+        ):
+            text, stats = service.transcribe_with_stats("dummy.wav", "Hindi")
+
+        self.assertEqual(text, "fallback text")
+        self.assertEqual(stats["route"], "indicwav2vec_whisper_fallback")
+        mock_prepare.assert_called_once_with("dummy.wav", target_sr=16000)
+        self.assertEqual(mock_indic.call_args.kwargs["prepared_audio"], ("prepared-audio", 16000))
+        self.assertEqual(mock_whisper.call_args.kwargs["prepared_audio"], ("prepared-audio", 16000))
 
 
 if __name__ == "__main__":

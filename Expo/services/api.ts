@@ -84,6 +84,7 @@ export async function translateText(params: {
   text: string;
   sourceLanguage: SupportedLanguage;
   targetLanguage: SupportedLanguage;
+  includeSpeech?: boolean;
 }): Promise<TranslationResponse> {
   const res = await fetch(`${API_BASE_URL}/translate/text`, {
     method: 'POST',
@@ -92,7 +93,7 @@ export async function translateText(params: {
       text: params.text,
       source_language: params.sourceLanguage,
       target_language: params.targetLanguage,
-      include_speech: true,
+      include_speech: params.includeSpeech ?? false,
     }),
   });
 
@@ -107,6 +108,7 @@ export async function translateSpeech(params: {
   audioFile: AudioUploadSource;
   sourceLanguage: SupportedLanguage;
   targetLanguage: SupportedLanguage;
+  includeSpeech?: boolean;
 }): Promise<TranslationResponse> {
   const data = new FormData();
   if (typeof params.audioFile === 'object' && params.audioFile !== null && 'uri' in params.audioFile) {
@@ -116,6 +118,7 @@ export async function translateSpeech(params: {
   }
   data.append('source_language', params.sourceLanguage);
   data.append('target_language', params.targetLanguage);
+  data.append('include_speech', String(params.includeSpeech ?? false));
 
   const res = await fetch(`${API_BASE_URL}/translate/speech`, {
     method: 'POST',

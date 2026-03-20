@@ -567,6 +567,7 @@ def translate_speech(
     audio: UploadFile = File(...),  # Multipart uploaded file.
     source_language: str = Form(...),  # Source language string from form field.
     target_language: str = Form(...),  # Target language string from form field.
+    include_speech: bool = Form(True),  # Allow clients to skip blocking TTS for faster text-first responses.
     _: None = Depends(_require_api_key),  # Enforce API key dependency when configured.
 ):
     request_started = time.perf_counter()
@@ -642,7 +643,7 @@ def translate_speech(
         audio_url, tts_stats = _run_tts_best_effort(
             text=translated_text,
             target_language=target_language_name,
-            enabled=True,
+            enabled=include_speech,
         )
 
         total_latency_ms = round((time.perf_counter() - request_started) * 1000, 2)
@@ -655,6 +656,7 @@ def translate_speech(
                 "target_language": target_language_name,
                 "source_code": src_lang_code,
                 "target_code": tgt_lang_code,
+                "include_speech": include_speech,
                 "upload_bytes": bytes_written,
                 "audio_suffix": suffix,
                 "transcribed_chars": len(transcribed_text),

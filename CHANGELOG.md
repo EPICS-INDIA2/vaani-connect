@@ -20,6 +20,16 @@ Copy this block for each update:
 
 ---
 
+## 2026-03-20 - Reduced Speech Translation Latency
+
+- Area: Full Stack
+- Summary: Reduced end-to-end translation wait time by reusing decoded audio across backend ASR fallback paths and by switching the mobile app to request fast text-first translations without blocking on TTS unless the user explicitly taps listen.
+- Files: `backend/app/asr.py`, `backend/app/server.py`, `backend/tests/test_asr_language_fallback.py`, `backend/tests/test_server_hardening.py`, `Expo/services/api.ts`, `Expo/app/(tabs)/index.tsx`, `CHANGELOG.md`
+- Commands Run: `npm.cmd run typecheck`
+- Validation: Expo TypeScript typecheck passed. Added backend coverage for skip-TTS speech requests and prepared-audio reuse across ASR fallback paths, but backend unit tests could not be executed from this shell because no runnable Windows Python interpreter is available here and WSL launch is denied.
+- Notes/Risks: The API remains backward-compatible because `include_speech` still defaults to true on the backend, but the app now prefers generating audio on demand after the fast text response.
+- Next Step: Measure median latency before and after on a physical device and, if needed, tune translation decoding parameters for another speed pass.
+
 ## 2026-03-10 - Added Change Log
 
 - Area: Docs

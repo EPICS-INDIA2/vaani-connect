@@ -203,6 +203,23 @@ class ServerHardeningTests(unittest.TestCase):
         self.assertEqual(response.json()["transcribed_text"], "hello from asr")
         self.assertIsNone(response.json()["audio_url"])
 
+    def test_translate_speech_can_skip_tts_for_faster_text_response(self) -> None:
+        with patch.object(server, "tts_generate_with_metadata") as mock_tts:
+            response = self.client.post(
+                "/translate/speech",
+                data={
+                    "source_language": "English",
+                    "target_language": "Hindi",
+                    "include_speech": "false",
+                },
+                files={"audio": ("clip.wav", b"small-audio", "audio/wav")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["transcribed_text"], "hello from asr")
+        self.assertIsNone(response.json()["audio_url"])
+        mock_tts.assert_not_called()
+
     def test_rate_limit_returns_429(self) -> None:
         payload = {
             "text": "hello",

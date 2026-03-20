@@ -6,6 +6,7 @@ import time
 from threading import Lock
 from typing import Any
 
+import numpy as np
 import torch  # PyTorch: tensor math + deep learning runtime.
 import torchaudio  # Audio loading helpers from PyTorch ecosystem.
 import torchaudio.functional as AF  # Audio utility functions (we use resample below).
@@ -72,6 +73,8 @@ INDIC_CONFORMER_LANG_CODES = {
     "Telugu": "te",
     "Urdu": "ur",
 }
+
+PreparedAudio = tuple[np.ndarray, int]
 
 
 class ASRService:
@@ -173,15 +176,22 @@ class ASRService:
         # Remove the channel dimension and return (1D waveform, sample rate).
         return waveform.squeeze(0), sr
 
+    def _prepare_audio_input(self, audio_path: str, target_sr: int = 16000) -> PreparedAudio:
+        waveform, sr = self._load_and_resample_audio(audio_path, target_sr=target_sr)
+        return waveform.cpu().numpy(), sr
+
     # Internal path: transcribe using Whisper.
-    def _whisper_transcribe(self, audio_path: str, src_lang_name: str) -> str:
+    def _whisper_transcribe(
+        self,
+        audio_path: str,
+        src_lang_name: str,
+        prepared_audio: PreparedAudio | None = None,
+    ) -> str:
         # Convert app language name (like "Hindi") to Whisper code (like "hi").
         lang_code = WHISPER_LANG_MAP.get(src_lang_name)
 
         # Load and normalize audio to 16kHz mono.
-        waveform, sr = self._load_and_resample_audio(audio_path, target_sr=16000)
-        # Convert tensor to NumPy because processor accepts array-like audio input.
-        audio_np = waveform.cpu().numpy()
+        audio_np, sr = prepared_audio or self._prepare_audio_input(audio_path, target_sr=16000)
 
         # Create model input features as PyTorch tensors, then move them to GPU/CPU device.
         inputs = self.asr_processor_en(
@@ -245,13 +255,16 @@ class ASRService:
         return self.indic_asr_models[lang_name], self.indic_asr_processors[lang_name]
 
     # Internal path: transcribe using IndicWav2Vec (CTC) model.
-    def _indicwav2vec_transcribe(self, audio_path: str, src_lang_name: str) -> tuple[str, bool]:
+    def _indicwav2vec_transcribe(
+        self,
+        audio_path: str,
+        src_lang_name: str,
+        prepared_audio: PreparedAudio | None = None,
+    ) -> tuple[str, bool]:
         # Get model + processor for requested language.
         model, processor = self._get_indic_asr(src_lang_name)
         # Load and normalize audio to 16kHz mono.
-        waveform, sr = self._load_and_resample_audio(audio_path, target_sr=16000)
-        # Convert waveform tensor to NumPy for processor input.
-        audio_np = waveform.cpu().numpy()
+        audio_np, sr = prepared_audio or self._prepare_audio_input(audio_path, target_sr=16000)
 
         # Build model-ready input tensor(s).
         inputs = processor(audio_np, sampling_rate=sr, return_tensors="pt")
@@ -277,18 +290,23 @@ class ASRService:
             "Indic ASR produced empty transcription for %s. Falling back to Whisper.",
             src_lang_name,
         )
-        return self._whisper_transcribe(audio_path, src_lang_name), True
+        return self._whisper_transcribe(audio_path, src_lang_name, prepared_audio=prepared_audio), True
 
     # Optional provider path: IndicConformer multilingual model.
-    def _indic_conformer_transcribe(self, audio_path: str, src_lang_name: str) -> str:
+    def _indic_conformer_transcribe(
+        self,
+        audio_path: str,
+        src_lang_name: str,
+        prepared_audio: PreparedAudio | None = None,
+    ) -> str:
         lang_code = INDIC_CONFORMER_LANG_CODES.get(src_lang_name)
         if lang_code is None:
             raise ValueError(f"IndicConformer language is not configured for: {src_lang_name}")
 
         model = self._get_indic_conformer_model()
-        waveform, _ = self._load_and_resample_audio(audio_path, target_sr=16000)
+        audio_np, _ = prepared_audio or self._prepare_audio_input(audio_path, target_sr=16000)
         # Custom model expects shape [batch, time] in float32.
-        audio_tensor = waveform.unsqueeze(0).cpu().float()
+        audio_tensor = torch.from_numpy(audio_np).unsqueeze(0).cpu().float()
 
         with torch.no_grad():
             try:
@@ -311,18 +329,23 @@ class ASRService:
         audio_path: str,
         src_lang_name: str,
         started: float,
+        prepared_audio: PreparedAudio | None = None,
     ) -> tuple[str, dict[str, Any]]:
         # Use Indic model when one is available for this language.
         if src_lang_name in INDIC_ASR_MODEL_IDS:
             indic_model_id = INDIC_ASR_MODEL_IDS[src_lang_name]
             try:
-                text, used_whisper_fallback = self._indicwav2vec_transcribe(audio_path, src_lang_name)
+                text, used_whisper_fallback = self._indicwav2vec_transcribe(
+                    audio_path,
+                    src_lang_name,
+                    prepared_audio=prepared_audio,
+                )
             except Exception:  # noqa: BLE001 - keep ASR available even if Indic model path fails.
                 logger.exception(
                     "Indic ASR failed for %s. Falling back to Whisper.",
                     src_lang_name,
                 )
-                text = self._whisper_transcribe(audio_path, src_lang_name)
+                text = self._whisper_transcribe(audio_path, src_lang_name, prepared_audio=prepared_audio)
                 used_whisper_fallback = True
 
             if used_whisper_fallback:
@@ -347,7 +370,7 @@ class ASRService:
             }
 
         # Fallback: use Whisper for other configured languages.
-        text = self._whisper_transcribe(audio_path, src_lang_name)
+        text = self._whisper_transcribe(audio_path, src_lang_name, prepared_audio=prepared_audio)
         language_hint_applied = src_lang_name in WHISPER_LANG_MAP
         return text, {
             "route": "whisper_fallback_hinted" if language_hint_applied else "whisper_fallback_autodetect",
@@ -363,10 +386,15 @@ class ASRService:
     # Public method used by the rest of app: choose model path and return text transcription.
     def transcribe_with_stats(self, audio_path: str, src_lang_name: str) -> tuple[str, dict[str, Any]]:
         started = time.perf_counter()
+        prepared_audio = self._prepare_audio_input(audio_path, target_sr=16000)
 
         # Always use Whisper for English.
         if src_lang_name == "English":
-            text = self._whisper_transcribe(audio_path, src_lang_name="English")
+            text = self._whisper_transcribe(
+                audio_path,
+                src_lang_name="English",
+                prepared_audio=prepared_audio,
+            )
             return text, {
                 "route": "whisper_direct",
                 "model_id": self.asr_model_id_en,
@@ -381,7 +409,11 @@ class ASRService:
         if self.asr_provider == "indic_conformer_multi":
             if src_lang_name in INDIC_CONFORMER_LANG_CODES:
                 try:
-                    text = self._indic_conformer_transcribe(audio_path, src_lang_name)
+                    text = self._indic_conformer_transcribe(
+                        audio_path,
+                        src_lang_name,
+                        prepared_audio=prepared_audio,
+                    )
                     return text, {
                         "route": "indic_conformer_multi_direct",
                         "model_id": self.indic_conformer_model_id,
@@ -402,6 +434,7 @@ class ASRService:
                         audio_path=audio_path,
                         src_lang_name=src_lang_name,
                         started=started,
+                        prepared_audio=prepared_audio,
                     )
                     legacy_stats["route"] = f"indic_conformer_multi_rollback_to_{legacy_stats['route']}"
                     legacy_stats["provider"] = self.asr_provider
@@ -419,6 +452,7 @@ class ASRService:
             audio_path=audio_path,
             src_lang_name=src_lang_name,
             started=started,
+            prepared_audio=prepared_audio,
         )
 
     def transcribe(self, audio_path: str, src_lang_name: str) -> str:
