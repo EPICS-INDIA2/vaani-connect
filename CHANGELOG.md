@@ -20,6 +20,16 @@ Copy this block for each update:
 
 ---
 
+## 2026-03-21 - Sprint 4 Release Hardening
+
+- Area: Expo | Docs
+- Summary: Tuned the main translation screen for smoother language searching by deferring the search query and virtualizing the language picker list, then refreshed the publishability checklist and release guide with the current device QA and release-gate expectations.
+- Files: `Expo/app/(tabs)/index.tsx`, `PUBLISHABILITY_CHECKLIST.md`, `RELEASE_SH_GUIDE.md`
+- Commands Run: `npm.cmd run typecheck`, `cmd /c npx eslint . --no-cache`
+- Validation: Expo TypeScript typecheck passed and ESLint passed through the non-PowerShell entrypoint.
+- Notes/Risks: Physical Android and iPhone QA, EAS project connection, and store assets remain release blockers.
+- Next Step: Run the release candidate on real devices, then finish EAS and store-submission readiness once the remaining backend and branding items are finalized.
+
 ## 2026-03-20 - Fixed Backend CI Test Expectation
 
 - Area: Backend

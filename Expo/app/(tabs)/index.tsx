@@ -9,11 +9,12 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
+  FlatList,
   Modal,
   Pressable,
   ScrollView,
@@ -418,15 +419,16 @@ export default function HomeScreen() {
   const pickerSelection = languagePickerField === 'target' ? targetLanguage : sourceLanguage;
   const hasTranscript = activeOrigin === 'speech' && transcriptText.trim().length > 0;
   const presetPairs = useMemo(() => collectPresetPairs(history), [history]);
+  const deferredLanguageQuery = useDeferredValue(languageQuery);
   const filteredLanguages = useMemo(() => {
-    const query = languageQuery.trim().toLowerCase();
+    const query = deferredLanguageQuery.trim().toLowerCase();
     if (!query) return availableLanguages;
 
     return availableLanguages.filter((language) => {
       const nativeLabel = getLanguageLabel(language).toLowerCase();
       return language.toLowerCase().includes(query) || nativeLabel.includes(query);
     });
-  }, [availableLanguages, languageQuery]);
+  }, [availableLanguages, deferredLanguageQuery]);
   const hasResult = outputText.trim().length > 0 || isTranslatingText || isTranslatingSpeech;
   const statusTone = getStatusTone(uiStatus, backendStatus, isRefreshingBackend, ui);
   const backendTone = getBackendTone(backendStatus, isRefreshingBackend, backendLastCheckedAt, ui);
@@ -1149,25 +1151,7 @@ export default function HomeScreen() {
               </Pressable>
             </View>
 
-            <View style={styles.presetSection}>
-              <View style={styles.presetSectionHeader}>
-                <View style={styles.presetSectionCopy}>
-                  <ThemedText style={styles.presetSectionTitle}>{ui.quickPresetsTitle}</ThemedText>
-                  <ThemedText style={styles.presetSectionHint}>{ui.quickPresetsHint}</ThemedText>
-                </View>
-              </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetRail}>
-                {presetPairs.map((preset) => (
-                  <Pressable
-                    key={buildLanguagePairKey(preset.sourceLanguage, preset.targetLanguage)}
-                    style={styles.presetChip}
-                    onPress={() => applyPresetPair(preset)}>
-                    <ThemedText style={styles.presetChipLabel}>{preset.label}</ThemedText>
-                    {preset.isRecent ? <ThemedText style={styles.presetChipMeta}>{ui.quickPresetRecent}</ThemedText> : null}
-                  </Pressable>
-                ))}
-              </ScrollView>
-            </View>
+            <PresetRailSection ui={ui} presets={presetPairs} onSelectPreset={applyPresetPair} />
 
             <View style={[styles.languageRoute, compactLayout && styles.languageRouteCompact]}>
               <LanguageSelector
@@ -1386,67 +1370,16 @@ export default function HomeScreen() {
         </Animated.View>
       </ScrollView>
 
-      <Modal visible={languagePickerField !== null} transparent animationType="slide" onRequestClose={closeLanguagePicker}>
-        <Pressable style={styles.modalBackdrop} onPress={closeLanguagePicker}>
-          <Pressable style={styles.modalSheet} onPress={() => {}}>
-            <View style={styles.modalHandle} />
-
-            <View style={styles.modalHeader}>
-              <View style={styles.modalHeaderCopy}>
-                <ThemedText style={styles.modalTitle}>{ui.chooseLanguage}</ThemedText>
-                <ThemedText style={styles.modalSubtitle}>{UI_SUBTITLES.modal}</ThemedText>
-              </View>
-              <Pressable style={styles.modalCloseButton} onPress={closeLanguagePicker}>
-                <MaterialIcons name="close" size={20} color={TEXT_PRIMARY} />
-              </Pressable>
-            </View>
-
-            <View style={styles.searchField}>
-              <MaterialIcons name="search" size={18} color={TEXT_MUTED} />
-              <View style={styles.searchCopy}>
-                <TextInput
-                  value={languageQuery}
-                  onChangeText={setLanguageQuery}
-                  placeholder={ui.searchLanguage}
-                  placeholderTextColor="rgba(174, 188, 183, 0.55)"
-                  style={styles.searchInput}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <ThemedText style={styles.searchSubtitle}>{UI_SUBTITLES.search}</ThemedText>
-              </View>
-            </View>
-
-            <ScrollView style={styles.languageList} showsVerticalScrollIndicator={false}>
-              {filteredLanguages.length > 0 ? (
-                filteredLanguages.map((language) => (
-                  <Pressable
-                    key={language}
-                    style={[styles.languageRow, language === pickerSelection && styles.languageRowActive]}
-                    onPress={() => handleLanguageSelect(language)}>
-                    <View style={styles.languageRowCopy}>
-                      <ThemedText style={[styles.languageRowLabel, language === pickerSelection && styles.languageRowLabelActive]}>
-                        {getLanguageLabel(language)}
-                      </ThemedText>
-                      <ThemedText style={styles.languageRowSubtitle}>{language}</ThemedText>
-                    </View>
-                    {language === pickerSelection ? (
-                      <MaterialIcons name="check-circle" size={20} color={ACCENT_STRONG} />
-                    ) : (
-                      <MaterialIcons name="chevron-right" size={20} color={TEXT_MUTED} />
-                    )}
-                  </Pressable>
-                ))
-              ) : (
-                <View style={styles.emptyState}>
-                  <ThemedText style={styles.emptyTitle}>{ui.noLanguageFound}</ThemedText>
-                  <ThemedText style={styles.emptySubtitle}>{ui.tryAnotherWord}</ThemedText>
-                </View>
-              )}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <LanguagePickerSheet
+        visible={languagePickerField !== null}
+        ui={ui}
+        query={languageQuery}
+        onChangeQuery={setLanguageQuery}
+        filteredLanguages={filteredLanguages}
+        selectedLanguage={pickerSelection}
+        onSelectLanguage={handleLanguageSelect}
+        onClose={closeLanguagePicker}
+      />
     </View>
   );
 }
@@ -1665,6 +1598,134 @@ function EditorCard({
     </View>
   );
 }
+
+const PresetRailSection = memo(function PresetRailSection({
+  ui,
+  presets,
+  onSelectPreset,
+}: {
+  ui: ReturnType<typeof getUiCopy>;
+  presets: LanguagePreset[];
+  onSelectPreset: (preset: LanguagePreset) => void;
+}) {
+  return (
+    <View style={styles.presetSection}>
+      <View style={styles.presetSectionHeader}>
+        <View style={styles.presetSectionCopy}>
+          <ThemedText style={styles.presetSectionTitle}>{ui.quickPresetsTitle}</ThemedText>
+          <ThemedText style={styles.presetSectionHint}>{ui.quickPresetsHint}</ThemedText>
+        </View>
+      </View>
+      <FlatList
+        data={presets}
+        keyExtractor={(preset) => buildLanguagePairKey(preset.sourceLanguage, preset.targetLanguage)}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        contentContainerStyle={styles.presetRail}
+        renderItem={({ item: preset }) => (
+          <Pressable style={styles.presetChip} onPress={() => onSelectPreset(preset)}>
+            <ThemedText style={styles.presetChipLabel}>{preset.label}</ThemedText>
+            {preset.isRecent ? <ThemedText style={styles.presetChipMeta}>{ui.quickPresetRecent}</ThemedText> : null}
+          </Pressable>
+        )}
+      />
+    </View>
+  );
+});
+
+const LanguagePickerSheet = memo(function LanguagePickerSheet({
+  visible,
+  ui,
+  query,
+  onChangeQuery,
+  filteredLanguages,
+  selectedLanguage,
+  onSelectLanguage,
+  onClose,
+}: {
+  visible: boolean;
+  ui: ReturnType<typeof getUiCopy>;
+  query: string;
+  onChangeQuery: (value: string) => void;
+  filteredLanguages: SupportedLanguage[];
+  selectedLanguage: SupportedLanguage;
+  onSelectLanguage: (language: SupportedLanguage) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <View style={styles.modalHandle} />
+
+          <View style={styles.modalHeader}>
+            <View style={styles.modalHeaderCopy}>
+              <ThemedText style={styles.modalTitle}>{ui.chooseLanguage}</ThemedText>
+              <ThemedText style={styles.modalSubtitle}>{UI_SUBTITLES.modal}</ThemedText>
+            </View>
+            <Pressable style={styles.modalCloseButton} onPress={onClose}>
+              <MaterialIcons name="close" size={20} color={TEXT_PRIMARY} />
+            </Pressable>
+          </View>
+
+          <View style={styles.searchField}>
+            <MaterialIcons name="search" size={18} color={TEXT_MUTED} />
+            <View style={styles.searchCopy}>
+              <TextInput
+                value={query}
+                onChangeText={onChangeQuery}
+                placeholder={ui.searchLanguage}
+                placeholderTextColor="rgba(174, 188, 183, 0.55)"
+                style={styles.searchInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <ThemedText style={styles.searchSubtitle}>{UI_SUBTITLES.search}</ThemedText>
+            </View>
+          </View>
+
+          <FlatList
+            data={filteredLanguages}
+            keyExtractor={(language) => language}
+            style={styles.languageList}
+            contentContainerStyle={
+              filteredLanguages.length > 0 ? styles.languageListContent : styles.languageListEmptyContent
+            }
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            initialNumToRender={16}
+            maxToRenderPerBatch={20}
+            renderItem={({ item: language }) => (
+              <Pressable
+                style={[styles.languageRow, language === selectedLanguage && styles.languageRowActive]}
+                onPress={() => onSelectLanguage(language)}>
+                <View style={styles.languageRowCopy}>
+                  <ThemedText style={[styles.languageRowLabel, language === selectedLanguage && styles.languageRowLabelActive]}>
+                    {getLanguageLabel(language)}
+                  </ThemedText>
+                  <ThemedText style={styles.languageRowSubtitle}>{language}</ThemedText>
+                </View>
+                {language === selectedLanguage ? (
+                  <MaterialIcons name="check-circle" size={20} color={ACCENT_STRONG} />
+                ) : (
+                  <MaterialIcons name="chevron-right" size={20} color={TEXT_MUTED} />
+                )}
+              </Pressable>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyState}>
+                <ThemedText style={styles.emptyTitle}>{ui.noLanguageFound}</ThemedText>
+                <ThemedText style={styles.emptySubtitle}>{ui.tryAnotherWord}</ThemedText>
+              </View>
+            }
+          />
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+});
 
 const styles = StyleSheet.create({
   screen: {
@@ -2532,6 +2593,14 @@ const styles = StyleSheet.create({
   },
   languageList: {
     minHeight: 220,
+  },
+  languageListContent: {
+    gap: 10,
+    paddingBottom: 4,
+  },
+  languageListEmptyContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   languageRow: {
     flexDirection: 'row',

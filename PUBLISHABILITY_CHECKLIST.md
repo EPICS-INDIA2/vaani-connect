@@ -9,7 +9,8 @@ This checklist tracks the work needed to move Vaani Connect from a working demo 
 - [ ] Test speech record and playback on at least one physical Android device.
 - [ ] Test speech record and playback on at least one physical iPhone.
 - [ ] Add interrupted-audio handling for phone calls, Bluetooth changes, and app backgrounding.
-- [ ] Add user-facing error states for offline, timeout, and backend overload conditions.
+- [x] Add user-facing error states for offline, timeout, and backend overload conditions.
+  - Implemented in `Expo/app/(tabs)/index.tsx` and `Expo/services/api.ts` with inline banners and normalized backend/network error handling.
 
 ## 2. App configuration and branding
 
@@ -53,3 +54,10 @@ This checklist tracks the work needed to move Vaani Connect from a working demo 
 3. Run preview builds on real devices and close any platform-specific bugs.
 4. Add frontend test coverage for the translation flow and failure states.
 5. Prepare store assets, privacy policy, and submission metadata.
+
+## Sprint 4 release gate
+
+- Verify the Expo app on at least one Android phone and one iPhone before submission.
+- Confirm the current error-state, transcript-review, and history-recovery flows still behave correctly in release builds.
+- Keep `EXPO_PUBLIC_API_BASE_URL` and any protected preview credentials documented in EAS before generating builds.
+- Do not mark the remaining publishability items complete until the real store URLs, artwork, and backend production-hardening tasks are finalized.
