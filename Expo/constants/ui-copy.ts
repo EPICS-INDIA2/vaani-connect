@@ -50,6 +50,51 @@ type UiCopy = {
   errorUnauthorizedMessage: string;
   errorAudioUnavailableTitle: string;
   errorAudioUnavailableMessage: string;
+  transcriptLabel: string;
+  transcriptTitle: string;
+  transcriptPlaceholder: string;
+  retranslate: string;
+  micOnboardingTitle: string;
+  micOnboardingMessage: string;
+  micOnboardingDismiss: string;
+  micPermissionHint: string;
+  historyTitle: string;
+  historyEmptyTitle: string;
+  historyEmptyMessage: string;
+  clearHistory: string;
+  clearHistoryConfirmTitle: string;
+  clearHistoryConfirmMessage: string;
+  clearHistoryConfirmAction: string;
+  cancel: string;
+  historyRestored: string;
+  speechHistoryBadge: string;
+  textHistoryBadge: string;
+  modeTranslate: string;
+  modeConversation: string;
+  quickPresetsTitle: string;
+  quickPresetsHint: string;
+  quickPresetRecent: string;
+  conversationTitle: string;
+  conversationSubtitle: string;
+  conversationEmptyTitle: string;
+  conversationEmptyMessage: string;
+  conversationTurnLabel: string;
+  conversationSwapNote: string;
+  conversationSpeakHint: string;
+  conversationRetry: string;
+  backendCheckingTitle: string;
+  backendCheckingMessage: string;
+  backendReadyTitle: string;
+  backendReadyMessage: string;
+  backendWarmingTitle: string;
+  backendWarmingMessage: string;
+  backendOfflineTitle: string;
+  backendOfflineMessage: string;
+  backendUnauthorizedTitle: string;
+  backendUnauthorizedMessage: string;
+  backendErrorTitle: string;
+  backendErrorMessage: string;
+  backendRefresh: string;
   chooseLanguage: string;
   searchLanguage: string;
   noLanguageFound: string;
@@ -117,6 +162,51 @@ const ENGLISH_UI: UiCopy = {
   errorUnauthorizedMessage: 'Check the API key configuration for this environment.',
   errorAudioUnavailableTitle: 'Audio unavailable',
   errorAudioUnavailableMessage: 'Voice playback could not be prepared for this result.',
+  transcriptLabel: 'Transcript',
+  transcriptTitle: 'Review speech',
+  transcriptPlaceholder: 'Speech transcript will appear here',
+  retranslate: 'Re-translate',
+  micOnboardingTitle: 'Voice translation is ready',
+  micOnboardingMessage: 'Tap Speak, allow microphone access, then stop recording to translate your speech.',
+  micOnboardingDismiss: 'Dismiss',
+  micPermissionHint: 'Microphone access is off. Enable it to record speech for translation.',
+  historyTitle: 'Recent translations',
+  historyEmptyTitle: 'No recent translations',
+  historyEmptyMessage: 'Successful text and speech translations will appear here.',
+  clearHistory: 'Clear history',
+  clearHistoryConfirmTitle: 'Clear recent translations?',
+  clearHistoryConfirmMessage: 'This removes the saved local history from this device.',
+  clearHistoryConfirmAction: 'Clear',
+  cancel: 'Cancel',
+  historyRestored: 'History restored',
+  speechHistoryBadge: 'Speech',
+  textHistoryBadge: 'Text',
+  modeTranslate: 'Translate',
+  modeConversation: 'Conversation',
+  quickPresetsTitle: 'Quick language pairs',
+  quickPresetsHint: 'Tap a pair to jump straight into that route.',
+  quickPresetRecent: 'Recent',
+  conversationTitle: 'Conversation mode',
+  conversationSubtitle: 'Speak one turn at a time and let the app swap the pair after each successful turn.',
+  conversationEmptyTitle: 'No turns yet',
+  conversationEmptyMessage: 'Tap Speak to capture the first side of the conversation.',
+  conversationTurnLabel: 'Turn',
+  conversationSwapNote: 'Next turn will use the swapped language pair.',
+  conversationSpeakHint: 'Record a turn, stop, then review the translated reply below.',
+  conversationRetry: 'Retry turn',
+  backendCheckingTitle: 'Checking backend',
+  backendCheckingMessage: 'Verifying that the translation service is reachable.',
+  backendReadyTitle: 'Backend ready',
+  backendReadyMessage: 'The translation service is reachable and ready for requests.',
+  backendWarmingTitle: 'Backend warming up',
+  backendWarmingMessage: 'The service is reachable, but the readiness check is not complete yet.',
+  backendOfflineTitle: 'Backend offline',
+  backendOfflineMessage: 'The app cannot reach the backend right now. Check the server and retry.',
+  backendUnauthorizedTitle: 'Backend access blocked',
+  backendUnauthorizedMessage: 'The backend is responding, but this app is not authorized to use it.',
+  backendErrorTitle: 'Backend error',
+  backendErrorMessage: 'The backend responded unexpectedly. Try refreshing the connection.',
+  backendRefresh: 'Refresh',
   chooseLanguage: 'Choose language',
   searchLanguage: 'Search language',
   noLanguageFound: 'No language found',
@@ -936,6 +1026,8 @@ export const UI_SUBTITLES = {
   result: 'Translation result',
   input: 'Type or speak',
   translate: 'Send for translation',
+  conversation: 'Speak, stop, and swap after each turn',
+  presets: 'Jump to a common route',
   modal: 'Select language',
   search: 'Search by English or native name',
 } as const;

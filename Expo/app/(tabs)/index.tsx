@@ -32,6 +32,7 @@ import { getUiCopy, UI_SUBTITLES } from '@/constants/ui-copy';
 import {
   ApiError,
   type ApiErrorCode,
+  type BackendStatus,
   createNativeAudioUpload,
   fetchSupportedLanguages,
   toAbsoluteAudioUrl,
@@ -39,7 +40,14 @@ import {
   translateText,
   type TranslationResponse,
 } from '@/services/api';
-import { loadStoredPreferences, saveStoredPreferences } from '@/services/preferences';
+import {
+  AppMode,
+  loadStoredPreferences,
+  saveStoredPreferences,
+  type StoredHistoryEntry,
+  type TranslationOrigin,
+} from '@/services/preferences';
+import { useBackendStatus } from '@/hooks/use-backend-status';
 
 const SURFACE = '#10242a';
 const SURFACE_BORDER = 'rgba(233, 228, 212, 0.12)';
@@ -66,11 +74,78 @@ type UiStatus =
   | 'backend_unavailable'
   | 'error';
 
+type ConversationTurn = {
+  id: string;
+  createdAt: string;
+  sourceLanguage: SupportedLanguage;
+  targetLanguage: SupportedLanguage;
+  sourceText: string;
+  translatedText: string;
+  transcribedText?: string;
+  origin: TranslationOrigin;
+};
+
+type RetryableAction =
+  | {
+      kind: 'text_translate';
+      sourceLanguage: SupportedLanguage;
+      targetLanguage: SupportedLanguage;
+      text: string;
+      includeSpeech: boolean;
+      mode: AppMode;
+      origin: TranslationOrigin;
+    }
+  | {
+      kind: 'speech_translate';
+      sourceLanguage: SupportedLanguage;
+      targetLanguage: SupportedLanguage;
+      audioUri: string;
+      mode: AppMode;
+    }
+  | {
+      kind: 'regenerate_audio';
+      sourceLanguage: SupportedLanguage;
+      targetLanguage: SupportedLanguage;
+      text: string;
+      mode: AppMode;
+      origin: TranslationOrigin;
+    }
+  | {
+      kind: 'refresh_backend';
+    };
+
+type LanguagePreset = {
+  sourceLanguage: SupportedLanguage;
+  targetLanguage: SupportedLanguage;
+  label: string;
+  isRecent: boolean;
+};
+
 type BannerMessage = {
   code: ApiErrorCode;
   title: string;
   message: string;
 };
+
+function buildHistoryEntry(params: {
+  sourceLanguage: SupportedLanguage;
+  targetLanguage: SupportedLanguage;
+  sourceText: string;
+  translatedText: string;
+  transcribedText?: string;
+  origin: TranslationOrigin;
+}): StoredHistoryEntry {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: new Date().toISOString(),
+    sourceLanguage: params.sourceLanguage,
+    targetLanguage: params.targetLanguage,
+    sourceText: params.sourceText,
+    translatedText: params.translatedText,
+    transcribedText: params.transcribedText,
+    origin: params.origin,
+  };
+}
 
 function resolveInitialPair(
   languages: SupportedLanguage[],
@@ -98,15 +173,79 @@ function resolveInitialPair(
   return { sourceLanguage, targetLanguage };
 }
 
+function buildLanguagePairKey(sourceLanguage: SupportedLanguage, targetLanguage: SupportedLanguage) {
+  return `${sourceLanguage}:::${targetLanguage}`;
+}
+
+function buildPresetLabel(sourceLanguage: SupportedLanguage, targetLanguage: SupportedLanguage) {
+  return `${sourceLanguage} → ${targetLanguage}`;
+}
+
+function collectPresetPairs(history: StoredHistoryEntry[]): LanguagePreset[] {
+  const builtInPairs: LanguagePreset[] = [
+    { sourceLanguage: 'English', targetLanguage: 'Hindi', label: buildPresetLabel('English', 'Hindi'), isRecent: false },
+    { sourceLanguage: 'Hindi', targetLanguage: 'English', label: buildPresetLabel('Hindi', 'English'), isRecent: false },
+    { sourceLanguage: 'English', targetLanguage: 'Tamil', label: buildPresetLabel('English', 'Tamil'), isRecent: false },
+    { sourceLanguage: 'English', targetLanguage: 'Telugu', label: buildPresetLabel('English', 'Telugu'), isRecent: false },
+  ];
+
+  const pairs = [...builtInPairs];
+  const seen = new Set(pairs.map((item) => buildLanguagePairKey(item.sourceLanguage, item.targetLanguage)));
+
+  for (const entry of history) {
+    const key = buildLanguagePairKey(entry.sourceLanguage, entry.targetLanguage);
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    pairs.push({
+      sourceLanguage: entry.sourceLanguage,
+      targetLanguage: entry.targetLanguage,
+      label: buildPresetLabel(entry.sourceLanguage, entry.targetLanguage),
+      isRecent: true,
+    });
+
+    if (pairs.length >= 8) {
+      break;
+    }
+  }
+
+  return pairs;
+}
+
+function buildConversationTurn(params: {
+  sourceLanguage: SupportedLanguage;
+  targetLanguage: SupportedLanguage;
+  sourceText: string;
+  translatedText: string;
+  transcribedText?: string;
+  origin: TranslationOrigin;
+}): ConversationTurn {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: new Date().toISOString(),
+    sourceLanguage: params.sourceLanguage,
+    targetLanguage: params.targetLanguage,
+    sourceText: params.sourceText,
+    translatedText: params.translatedText,
+    transcribedText: params.transcribedText,
+    origin: params.origin,
+  };
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [availableLanguages, setAvailableLanguages] = useState<SupportedLanguage[]>([...SUPPORTED_LANGUAGES]);
   const [sourceLanguage, setSourceLanguage] = useState<SupportedLanguage>(DEFAULT_SOURCE_LANGUAGE);
   const [targetLanguage, setTargetLanguage] = useState<SupportedLanguage>(DEFAULT_TARGET_LANGUAGE);
+  const [appMode, setAppMode] = useState<AppMode>('translate');
   const [inputText, setInputText] = useState('');
   const [outputText, setOutputText] = useState('');
   const [latestAudioUrl, setLatestAudioUrl] = useState<string | null>(null);
+  const [transcriptText, setTranscriptText] = useState('');
+  const [activeOrigin, setActiveOrigin] = useState<TranslationOrigin>('text');
   const [uiStatus, setUiStatus] = useState<UiStatus>('ready');
   const [isTranslatingText, setIsTranslatingText] = useState(false);
   const [isTranslatingSpeech, setIsTranslatingSpeech] = useState(false);
@@ -115,6 +254,11 @@ export default function HomeScreen() {
   const [banner, setBanner] = useState<BannerMessage | null>(null);
   const [flashMessage, setFlashMessage] = useState<string | null>(null);
   const [didRestorePreferences, setDidRestorePreferences] = useState(false);
+  const [history, setHistory] = useState<StoredHistoryEntry[]>([]);
+  const [showMicOnboarding, setShowMicOnboarding] = useState(false);
+  const [showMicPermissionHint, setShowMicPermissionHint] = useState(false);
+  const [conversationTurns, setConversationTurns] = useState<ConversationTurn[]>([]);
+  const [lastFailedAction, setLastFailedAction] = useState<RetryableAction | null>(null);
 
   const scrollRef = useRef<ScrollView | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -123,6 +267,8 @@ export default function HomeScreen() {
   const recorderState = useAudioRecorderState(recorder, 200);
   const player = useAudioPlayer(null, { updateInterval: 200 });
   const playerStatus = useAudioPlayerStatus(player);
+  const { status: backendStatus, lastCheckedAt: backendLastCheckedAt, isRefreshing: isRefreshingBackend, refresh: refreshBackendStatus } =
+    useBackendStatus();
 
   useEffect(() => {
     Animated.parallel([
@@ -144,6 +290,11 @@ export default function HomeScreen() {
 
     async function loadLanguages() {
       const storedPreferences = await loadStoredPreferences();
+      if (isMounted && storedPreferences) {
+        setHistory(storedPreferences.recentHistory);
+        setShowMicOnboarding(!storedPreferences.microphoneOnboardingDismissed);
+        setAppMode(storedPreferences.lastMode);
+      }
 
       try {
         const fetched = await fetchSupportedLanguages();
@@ -171,6 +322,10 @@ export default function HomeScreen() {
         }
       } finally {
         if (isMounted) {
+          if (!storedPreferences) {
+            setShowMicOnboarding(true);
+            setAppMode('translate');
+          }
           setDidRestorePreferences(Boolean(storedPreferences));
         }
       }
@@ -194,8 +349,14 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    void saveStoredPreferences({ sourceLanguage, targetLanguage });
-  }, [sourceLanguage, targetLanguage]);
+    void saveStoredPreferences({
+      sourceLanguage,
+      targetLanguage,
+      lastMode: appMode,
+      microphoneOnboardingDismissed: !showMicOnboarding,
+      recentHistory: history,
+    });
+  }, [appMode, history, showMicOnboarding, sourceLanguage, targetLanguage]);
 
   useEffect(() => {
     if (!flashMessage) return undefined;
@@ -250,10 +411,13 @@ export default function HomeScreen() {
     () => inputText.trim().length > 0 && !isTranslatingSpeech,
     [inputText, isTranslatingSpeech],
   );
+  const isConversationMode = appMode === 'conversation';
   const compactLayout = width < 410;
   const ui = useMemo(() => getUiCopy(sourceLanguage), [sourceLanguage]);
   const isRecording = recorderState.isRecording;
   const pickerSelection = languagePickerField === 'target' ? targetLanguage : sourceLanguage;
+  const hasTranscript = activeOrigin === 'speech' && transcriptText.trim().length > 0;
+  const presetPairs = useMemo(() => collectPresetPairs(history), [history]);
   const filteredLanguages = useMemo(() => {
     const query = languageQuery.trim().toLowerCase();
     if (!query) return availableLanguages;
@@ -264,11 +428,131 @@ export default function HomeScreen() {
     });
   }, [availableLanguages, languageQuery]);
   const hasResult = outputText.trim().length > 0 || isTranslatingText || isTranslatingSpeech;
-  const statusTone = getStatusTone(uiStatus, ui);
+  const statusTone = getStatusTone(uiStatus, backendStatus, isRefreshingBackend, ui);
+  const backendTone = getBackendTone(backendStatus, isRefreshingBackend, backendLastCheckedAt, ui);
 
   function clearFeedback() {
     setBanner(null);
     setFlashMessage(null);
+  }
+
+  function clearWorkspaceDrafts() {
+    setInputText('');
+    setOutputText('');
+    setLatestAudioUrl(null);
+    setTranscriptText('');
+    setActiveOrigin('text');
+  }
+
+  function pushHistoryEntry(entry: StoredHistoryEntry) {
+    setHistory((current) => [entry, ...current.filter((item) => item.id !== entry.id)].slice(0, 10));
+  }
+
+  function applyMode(nextMode: AppMode) {
+    if (nextMode === appMode) {
+      return;
+    }
+
+    clearFeedback();
+    setAppMode(nextMode);
+    setConversationTurns([]);
+    setLastFailedAction(null);
+    clearWorkspaceDrafts();
+
+    if (nextMode === 'conversation') {
+      setActiveOrigin('speech');
+    }
+  }
+
+  function applyLanguagePair(
+    nextSourceLanguage: SupportedLanguage,
+    nextTargetLanguage: SupportedLanguage,
+    options?: { keepConversationTurns?: boolean },
+  ) {
+    clearFeedback();
+    setSourceLanguage(nextSourceLanguage);
+    setTargetLanguage(nextTargetLanguage);
+    clearWorkspaceDrafts();
+    setLastFailedAction(null);
+
+    if (!options?.keepConversationTurns) {
+      setConversationTurns([]);
+    }
+  }
+
+  function applyPresetPair(preset: LanguagePreset) {
+    applyLanguagePair(preset.sourceLanguage, preset.targetLanguage);
+  }
+
+  function applyTranslation(
+    response: TranslationResponse,
+    options: {
+      origin: TranslationOrigin;
+      sourceText: string;
+      sourceLanguageUsed: SupportedLanguage;
+      targetLanguageUsed: SupportedLanguage;
+      transcribedText?: string;
+      addToHistory?: boolean;
+      mode?: AppMode;
+      clearDraft?: boolean;
+    },
+  ) {
+    if (playerStatus.playing) {
+      player.pause();
+    }
+
+    const resolvedTranscript = options.transcribedText ?? response.transcribed_text ?? '';
+    const resolvedSourceText =
+      options.origin === 'speech'
+        ? options.sourceText || resolvedTranscript || ''
+        : options.sourceText || inputText.trim();
+
+    if (options.origin === 'speech' && resolvedTranscript) {
+      setTranscriptText(resolvedTranscript);
+      setInputText(options.clearDraft ? '' : resolvedSourceText);
+    } else {
+      setTranscriptText('');
+      setInputText(options.clearDraft ? '' : resolvedSourceText);
+    }
+
+    setActiveOrigin(options.origin);
+    setOutputText(response.translated_text);
+    setLatestAudioUrl(response.audio_url ?? null);
+    setBanner(null);
+    setLastFailedAction(null);
+
+    if (options.mode === 'conversation') {
+      setConversationTurns((current) => [
+        buildConversationTurn({
+          sourceLanguage: options.sourceLanguageUsed,
+          targetLanguage: options.targetLanguageUsed,
+          sourceText: resolvedSourceText,
+          translatedText: response.translated_text,
+          transcribedText: options.origin === 'speech' ? resolvedTranscript || undefined : undefined,
+          origin: options.origin,
+        }),
+        ...current,
+      ]);
+      setSourceLanguage(options.targetLanguageUsed);
+      setTargetLanguage(options.sourceLanguageUsed);
+    }
+
+    if (options.addToHistory !== false && resolvedSourceText && response.translated_text.trim()) {
+      pushHistoryEntry(
+        buildHistoryEntry({
+          sourceLanguage: options.sourceLanguageUsed,
+          targetLanguage: options.targetLanguageUsed,
+          sourceText: resolvedSourceText,
+          translatedText: response.translated_text,
+          transcribedText: options.origin === 'speech' ? resolvedTranscript || undefined : undefined,
+          origin: options.origin,
+        }),
+      );
+    }
+
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: RESULT_CARD_SCROLL_Y, animated: true });
+    });
   }
 
   function getBannerForError(code: ApiErrorCode): BannerMessage {
@@ -312,47 +596,50 @@ export default function HomeScreen() {
     }
   }
 
-  function captureError(error: unknown, fallback: ApiErrorCode) {
+  function captureError(error: unknown, fallback: ApiErrorCode, retryAction?: RetryableAction) {
     const code = error instanceof ApiError ? error.code : fallback;
     setBanner(getBannerForError(code));
+    if (retryAction) {
+      setLastFailedAction(retryAction);
+    }
   }
 
   async function translateFromText() {
     if (!inputText.trim()) return;
 
     clearFeedback();
+    setActiveOrigin('text');
     setIsTranslatingText(true);
+    const text = inputText.trim();
+    const retryAction: RetryableAction = {
+      kind: 'text_translate',
+      sourceLanguage,
+      targetLanguage,
+      text,
+      includeSpeech: false,
+      mode: appMode,
+      origin: 'text',
+    };
     try {
       const response = await translateText({
-        text: inputText.trim(),
+        text,
         sourceLanguage,
         targetLanguage,
         includeSpeech: false,
       });
-      applyTranslation(response);
+      applyTranslation(response, {
+        origin: 'text',
+        sourceText: text,
+        sourceLanguageUsed: sourceLanguage,
+        targetLanguageUsed: targetLanguage,
+        mode: appMode,
+        clearDraft: isConversationMode,
+      });
     } catch (error) {
-      captureError(error, 'translation_failed');
+      captureError(error, 'translation_failed', retryAction);
     } finally {
       setIsTranslatingText(false);
     }
-  }
-
-  function applyTranslation(response: TranslationResponse) {
-    if (playerStatus.playing) {
-      player.pause();
-    }
-
-    if (response.transcribed_text) {
-      setInputText(response.transcribed_text);
-    }
-
-    setOutputText(response.translated_text);
-    setLatestAudioUrl(response.audio_url ?? null);
-    setBanner(null);
-
-    requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({ y: RESULT_CARD_SCROLL_Y, animated: true });
-    });
   }
 
   async function toggleRecording() {
@@ -362,9 +649,13 @@ export default function HomeScreen() {
       try {
         const permission = await requestRecordingPermissionsAsync();
         if (!permission.granted) {
+          setShowMicPermissionHint(true);
           Alert.alert(ui.alertMicPermissionTitle, ui.alertMicPermissionMessage);
           return;
         }
+
+        setShowMicOnboarding(false);
+        setShowMicPermissionHint(false);
 
         if (playerStatus.playing) {
           player.pause();
@@ -380,6 +671,7 @@ export default function HomeScreen() {
         await recorder.prepareToRecordAsync();
         recorder.record();
       } catch {
+        setShowMicPermissionHint(true);
         Alert.alert(ui.alertMicPermissionTitle, ui.alertMicPermissionMessage);
       }
 
@@ -387,6 +679,7 @@ export default function HomeScreen() {
     }
 
     setIsTranslatingSpeech(true);
+    let retryAction: RetryableAction | undefined;
     try {
       await recorder.stop();
       await setAudioModeAsync({
@@ -401,6 +694,13 @@ export default function HomeScreen() {
       if (!recordedUri) {
         throw new ApiError('speech_translation_failed', 'Recording URI unavailable');
       }
+      retryAction = {
+        kind: 'speech_translate',
+        sourceLanguage,
+        targetLanguage,
+        audioUri: recordedUri,
+        mode: appMode,
+      };
 
       const response = await translateSpeech({
         audioFile: createNativeAudioUpload(recordedUri),
@@ -408,9 +708,17 @@ export default function HomeScreen() {
         targetLanguage,
         includeSpeech: false,
       });
-      applyTranslation(response);
+      applyTranslation(response, {
+        origin: 'speech',
+        sourceText: response.transcribed_text?.trim() || '',
+        transcribedText: response.transcribed_text,
+        sourceLanguageUsed: sourceLanguage,
+        targetLanguageUsed: targetLanguage,
+        mode: appMode,
+        clearDraft: isConversationMode,
+      });
     } catch (error) {
-      captureError(error, 'speech_translation_failed');
+      captureError(error, 'speech_translation_failed', retryAction);
     } finally {
       setIsTranslatingSpeech(false);
     }
@@ -419,13 +727,8 @@ export default function HomeScreen() {
   async function playOutputAudio() {
     clearFeedback();
 
-    const absolute = toAbsoluteAudioUrl(latestAudioUrl);
-    if (absolute) {
-      await playAudio(absolute);
-      return;
-    }
-
     if (!outputText.trim()) {
+      setLastFailedAction(null);
       setBanner({
         code: 'audio_unavailable',
         title: ui.alertNoOutputTitle,
@@ -434,15 +737,42 @@ export default function HomeScreen() {
       return;
     }
 
+    const sourceText = activeOrigin === 'speech' && transcriptText.trim() ? transcriptText.trim() : inputText.trim();
+    const regenerateAction: RetryableAction = {
+      kind: 'regenerate_audio',
+      sourceLanguage,
+      targetLanguage,
+      text: sourceText || outputText.trim(),
+      mode: appMode,
+      origin: activeOrigin,
+    };
+    setLastFailedAction(regenerateAction);
+
+    const absolute = toAbsoluteAudioUrl(latestAudioUrl);
+    if (absolute) {
+      await playAudio(absolute);
+      return;
+    }
+
     try {
       setIsTranslatingText(true);
       const response = await translateText({
-        text: inputText.trim(),
+        text: sourceText || outputText.trim(),
         sourceLanguage,
         targetLanguage,
         includeSpeech: true,
       });
-      applyTranslation(response);
+      applyTranslation(response, {
+        origin: activeOrigin,
+        sourceText: sourceText || outputText.trim(),
+        transcribedText: activeOrigin === 'speech' ? transcriptText.trim() : undefined,
+        addToHistory: false,
+        sourceLanguageUsed: sourceLanguage,
+        targetLanguageUsed: targetLanguage,
+        mode: appMode,
+        clearDraft: isConversationMode,
+      });
+      setLastFailedAction(regenerateAction);
       const generatedAudioUrl = toAbsoluteAudioUrl(response.audio_url);
       if (!generatedAudioUrl) {
         throw new ApiError('audio_unavailable', 'Audio URL missing after generation');
@@ -450,7 +780,7 @@ export default function HomeScreen() {
 
       await playAudio(generatedAudioUrl);
     } catch (error) {
-      captureError(error, 'audio_unavailable');
+      captureError(error, 'audio_unavailable', regenerateAction);
     } finally {
       setIsTranslatingText(false);
     }
@@ -468,6 +798,7 @@ export default function HomeScreen() {
       player.replace({ uri: audioUrl });
       player.play();
       setBanner(null);
+      setLastFailedAction(null);
     } catch (error) {
       captureError(error, 'audio_unavailable');
     }
@@ -479,8 +810,11 @@ export default function HomeScreen() {
     setInputText(nextInput);
     setOutputText('');
     setLatestAudioUrl(null);
+    setTranscriptText('');
+    setActiveOrigin('text');
     setSourceLanguage(targetLanguage);
     setTargetLanguage(sourceLanguage);
+    setLastFailedAction(null);
   }
 
   function openLanguagePicker(field: LanguageField) {
@@ -509,6 +843,17 @@ export default function HomeScreen() {
     }
 
     closeLanguagePicker();
+    setConversationTurns([]);
+    setLastFailedAction(null);
+    clearWorkspaceDrafts();
+  }
+
+  function handleInputTextChange(value: string) {
+    setInputText(value);
+    if (activeOrigin === 'speech' && value !== transcriptText) {
+      setActiveOrigin('text');
+      setTranscriptText('');
+    }
   }
 
   async function copyOutputText() {
@@ -528,27 +873,165 @@ export default function HomeScreen() {
     setFlashMessage(ui.shared);
   }
 
+  async function retranslateTranscript() {
+    if (!transcriptText.trim()) return;
+
+    clearFeedback();
+    setIsTranslatingText(true);
+    const text = transcriptText.trim();
+    const retryAction: RetryableAction = {
+      kind: 'text_translate',
+      sourceLanguage,
+      targetLanguage,
+      text,
+      includeSpeech: false,
+      mode: appMode,
+      origin: 'speech',
+    };
+    try {
+      const response = await translateText({
+        text,
+        sourceLanguage,
+        targetLanguage,
+        includeSpeech: false,
+      });
+      applyTranslation(response, {
+        origin: 'speech',
+        sourceText: text,
+        transcribedText: text,
+        sourceLanguageUsed: sourceLanguage,
+        targetLanguageUsed: targetLanguage,
+        mode: appMode,
+        clearDraft: isConversationMode,
+      });
+    } catch (error) {
+      captureError(error, 'translation_failed', retryAction);
+    } finally {
+      setIsTranslatingText(false);
+    }
+  }
+
+  function dismissMicOnboarding() {
+    setShowMicOnboarding(false);
+  }
+
+  function restoreHistoryEntry(entry: StoredHistoryEntry) {
+    clearFeedback();
+    setAppMode('translate');
+    setConversationTurns([]);
+    setLastFailedAction(null);
+    setSourceLanguage(entry.sourceLanguage);
+    setTargetLanguage(entry.targetLanguage);
+    setInputText(entry.sourceText);
+    setOutputText(entry.translatedText);
+    setTranscriptText(entry.transcribedText ?? '');
+    setLatestAudioUrl(null);
+    setActiveOrigin(entry.origin);
+    setFlashMessage(ui.historyRestored);
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ y: RESULT_CARD_SCROLL_Y, animated: true });
+    });
+  }
+
+  function clearHistoryEntries() {
+    Alert.alert(ui.clearHistoryConfirmTitle, ui.clearHistoryConfirmMessage, [
+      { text: ui.cancel, style: 'cancel' },
+      {
+        text: ui.clearHistoryConfirmAction,
+        style: 'destructive',
+        onPress: () => setHistory([]),
+      },
+    ]);
+  }
+
   async function retryBannerAction() {
     if (!banner) return;
 
-    if (banner.code === 'audio_unavailable') {
-      await playOutputAudio();
+    const action = lastFailedAction;
+    if (!action) {
+      await refreshBackendStatus();
       return;
     }
 
-    if (inputText.trim()) {
-      await translateFromText();
-      return;
-    }
+    clearFeedback();
 
     try {
-      const fetched = await fetchSupportedLanguages();
-      if (fetched.length > 0) {
-        setAvailableLanguages(fetched);
+      if (action.kind === 'refresh_backend') {
+        await refreshBackendStatus();
+        return;
       }
-      setBanner(null);
+
+      setSourceLanguage(action.sourceLanguage);
+      setTargetLanguage(action.targetLanguage);
+      setAppMode(action.mode);
+
+      if (action.kind === 'text_translate') {
+        setInputText(action.text);
+        setActiveOrigin(action.origin);
+        const response = await translateText({
+          text: action.text,
+          sourceLanguage: action.sourceLanguage,
+          targetLanguage: action.targetLanguage,
+          includeSpeech: action.includeSpeech,
+        });
+        applyTranslation(response, {
+          origin: action.origin,
+          sourceText: action.text,
+          transcribedText: action.origin === 'speech' ? action.text : undefined,
+          sourceLanguageUsed: action.sourceLanguage,
+          targetLanguageUsed: action.targetLanguage,
+          mode: action.mode,
+          clearDraft: action.mode === 'conversation',
+        });
+        return;
+      }
+
+      if (action.kind === 'speech_translate') {
+        const response = await translateSpeech({
+          audioFile: createNativeAudioUpload(action.audioUri),
+          sourceLanguage: action.sourceLanguage,
+          targetLanguage: action.targetLanguage,
+          includeSpeech: false,
+        });
+        applyTranslation(response, {
+          origin: 'speech',
+          sourceText: response.transcribed_text?.trim() || '',
+          transcribedText: response.transcribed_text,
+          sourceLanguageUsed: action.sourceLanguage,
+          targetLanguageUsed: action.targetLanguage,
+          mode: action.mode,
+          clearDraft: action.mode === 'conversation',
+        });
+        return;
+      }
+
+      const response = await translateText({
+        text: action.text,
+        sourceLanguage: action.sourceLanguage,
+        targetLanguage: action.targetLanguage,
+        includeSpeech: true,
+      });
+      applyTranslation(response, {
+        origin: action.origin,
+        sourceText: action.text,
+        transcribedText: action.origin === 'speech' ? transcriptText.trim() : undefined,
+        addToHistory: false,
+        sourceLanguageUsed: action.sourceLanguage,
+        targetLanguageUsed: action.targetLanguage,
+        mode: action.mode,
+        clearDraft: action.mode === 'conversation',
+      });
+      setLastFailedAction(action);
+
+      const generatedAudioUrl = toAbsoluteAudioUrl(response.audio_url);
+      if (!generatedAudioUrl) {
+        throw new ApiError('audio_unavailable', 'Audio URL missing after generation');
+      }
+
+      await playAudio(generatedAudioUrl);
     } catch (error) {
-      captureError(error, 'backend_unreachable');
+      const fallback = action.kind === 'speech_translate' ? 'speech_translation_failed' : 'translation_failed';
+      captureError(error, fallback, action);
     }
   }
 
@@ -594,6 +1077,23 @@ export default function HomeScreen() {
               {didRestorePreferences ? <ThemedText style={styles.statusCardMeta}>{ui.statusSaved}</ThemedText> : null}
             </View>
 
+            {backendStatus !== 'ready' || isRefreshingBackend ? (
+              <View style={styles.backendNotice}>
+                <View style={styles.backendNoticeCopy}>
+                  <ThemedText style={styles.backendNoticeTitle}>{backendTone.title}</ThemedText>
+                  <ThemedText style={styles.backendNoticeMessage}>{backendTone.message}</ThemedText>
+                  {backendLastCheckedAt ? (
+                    <ThemedText style={styles.backendNoticeMeta}>
+                      {`${ui.statusLabel}: ${new Date(backendLastCheckedAt).toLocaleTimeString()}`}
+                    </ThemedText>
+                  ) : null}
+                </View>
+                <Pressable style={styles.backendNoticeButton} onPress={() => void refreshBackendStatus()}>
+                  <ThemedText style={styles.backendNoticeButtonText}>{backendTone.actionLabel}</ThemedText>
+                </Pressable>
+              </View>
+            ) : null}
+
             {banner ? (
               <View style={styles.banner}>
                 <View style={styles.bannerCopy}>
@@ -612,6 +1112,62 @@ export default function HomeScreen() {
                 <ThemedText style={styles.flashText}>{flashMessage}</ThemedText>
               </View>
             ) : null}
+
+            {showMicOnboarding ? (
+              <View style={styles.onboardingCard}>
+                <View style={styles.onboardingCopy}>
+                  <ThemedText style={styles.onboardingTitle}>{ui.micOnboardingTitle}</ThemedText>
+                  <ThemedText style={styles.onboardingMessage}>{ui.micOnboardingMessage}</ThemedText>
+                </View>
+                <Pressable style={styles.onboardingButton} onPress={dismissMicOnboarding}>
+                  <ThemedText style={styles.onboardingButtonText}>{ui.micOnboardingDismiss}</ThemedText>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {showMicPermissionHint ? (
+              <View style={styles.permissionHintCard}>
+                <MaterialIcons name="mic-off" size={18} color={DANGER} />
+                <ThemedText style={styles.permissionHintText}>{ui.micPermissionHint}</ThemedText>
+              </View>
+            ) : null}
+
+            <View style={styles.modeSwitcher}>
+              <Pressable
+                style={[styles.modeChip, !isConversationMode && styles.modeChipActive]}
+                onPress={() => applyMode('translate')}>
+                <ThemedText style={[styles.modeChipText, !isConversationMode && styles.modeChipTextActive]}>
+                  {ui.modeTranslate}
+                </ThemedText>
+              </Pressable>
+              <Pressable
+                style={[styles.modeChip, isConversationMode && styles.modeChipActive]}
+                onPress={() => applyMode('conversation')}>
+                <ThemedText style={[styles.modeChipText, isConversationMode && styles.modeChipTextActive]}>
+                  {ui.modeConversation}
+                </ThemedText>
+              </Pressable>
+            </View>
+
+            <View style={styles.presetSection}>
+              <View style={styles.presetSectionHeader}>
+                <View style={styles.presetSectionCopy}>
+                  <ThemedText style={styles.presetSectionTitle}>{ui.quickPresetsTitle}</ThemedText>
+                  <ThemedText style={styles.presetSectionHint}>{ui.quickPresetsHint}</ThemedText>
+                </View>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetRail}>
+                {presetPairs.map((preset) => (
+                  <Pressable
+                    key={buildLanguagePairKey(preset.sourceLanguage, preset.targetLanguage)}
+                    style={styles.presetChip}
+                    onPress={() => applyPresetPair(preset)}>
+                    <ThemedText style={styles.presetChipLabel}>{preset.label}</ThemedText>
+                    {preset.isRecent ? <ThemedText style={styles.presetChipMeta}>{ui.quickPresetRecent}</ThemedText> : null}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
 
             <View style={[styles.languageRoute, compactLayout && styles.languageRouteCompact]}>
               <LanguageSelector
@@ -645,6 +1201,53 @@ export default function HomeScreen() {
                 loading={isTranslatingSpeech}
               />
             </View>
+
+            {isConversationMode ? (
+              <View style={styles.conversationCard}>
+                <View style={styles.conversationHeader}>
+                  <View style={styles.conversationHeaderCopy}>
+                    <ThemedText style={styles.conversationTitle}>{ui.conversationTitle}</ThemedText>
+                    <ThemedText style={styles.conversationSubtitle}>{ui.conversationSubtitle}</ThemedText>
+                  </View>
+                  <Pressable
+                    style={[styles.conversationRetryButton, !lastFailedAction && styles.conversationRetryButtonDisabled]}
+                    onPress={() => void retryBannerAction()}
+                    disabled={!lastFailedAction || activeRequest}>
+                    <ThemedText style={styles.conversationRetryText}>{ui.conversationRetry}</ThemedText>
+                  </Pressable>
+                </View>
+
+                <ThemedText style={styles.conversationHint}>{ui.conversationSpeakHint}</ThemedText>
+
+                {conversationTurns.length > 0 ? (
+                  <View style={styles.conversationList}>
+                    {conversationTurns.map((turn, index) => (
+                      <View key={turn.id} style={styles.conversationTurnCard}>
+                        <View style={styles.conversationTurnHeader}>
+                          <ThemedText style={styles.conversationTurnLabel}>
+                            {ui.conversationTurnLabel} {index + 1}
+                          </ThemedText>
+                          <ThemedText style={styles.conversationTurnRoute}>
+                            {turn.sourceLanguage} {'->'} {turn.targetLanguage}
+                          </ThemedText>
+                        </View>
+                        <ThemedText style={styles.conversationTurnSource} numberOfLines={2}>
+                          {turn.transcribedText ?? turn.sourceText}
+                        </ThemedText>
+                        <ThemedText style={styles.conversationTurnTranslated} numberOfLines={3}>
+                          {turn.translatedText}
+                        </ThemedText>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.conversationEmptyCard}>
+                    <ThemedText style={styles.conversationEmptyTitle}>{ui.conversationEmptyTitle}</ThemedText>
+                    <ThemedText style={styles.conversationEmptyMessage}>{ui.conversationEmptyMessage}</ThemedText>
+                  </View>
+                )}
+              </View>
+            ) : null}
           </View>
           {hasResult ? (
             <>
@@ -688,6 +1291,29 @@ export default function HomeScreen() {
             </>
           ) : null}
 
+          {hasTranscript ? (
+            <View style={styles.transcriptCard}>
+              <EditorCard
+                label={ui.transcriptLabel}
+                title={ui.transcriptTitle}
+                subtitle={UI_SUBTITLES.input}
+                value={transcriptText}
+                placeholder={ui.transcriptPlaceholder}
+                editable
+                compact={compactLayout}
+                onChangeText={setTranscriptText}
+                footer={`${transcriptText.trim().length}`}
+              />
+              <Pressable
+                style={[styles.secondaryButton, (activeRequest || !transcriptText.trim()) && styles.secondaryButtonDisabled]}
+                onPress={() => void retranslateTranscript()}
+                disabled={activeRequest || !transcriptText.trim()}>
+                <MaterialIcons name="refresh" size={18} color={TEXT_PRIMARY} />
+                <ThemedText style={styles.secondaryButtonText}>{ui.retranslate}</ThemedText>
+              </Pressable>
+            </View>
+          ) : null}
+
           <EditorCard
             label={ui.inputLabel}
             title={isRecording ? ui.inputRecordingTitle : ui.inputTitle}
@@ -696,7 +1322,7 @@ export default function HomeScreen() {
             placeholder={ui.inputPlaceholder}
             editable
             compact={compactLayout}
-            onChangeText={setInputText}
+            onChangeText={handleInputTextChange}
             footer={`${inputText.trim().length}`}
           />
 
@@ -716,6 +1342,47 @@ export default function HomeScreen() {
               </View>
             </View>
           </Pressable>
+
+          <View style={styles.historySection}>
+            <View style={styles.historyHeader}>
+              <ThemedText style={styles.historyTitle}>{ui.historyTitle}</ThemedText>
+              {history.length > 0 ? (
+                <Pressable style={styles.historyClearButton} onPress={clearHistoryEntries}>
+                  <ThemedText style={styles.historyClearButtonText}>{ui.clearHistory}</ThemedText>
+                </Pressable>
+              ) : null}
+            </View>
+
+            {history.length > 0 ? (
+              <View style={styles.historyList}>
+                {history.map((entry) => (
+                  <Pressable key={entry.id} style={styles.historyCard} onPress={() => restoreHistoryEntry(entry)}>
+                    <View style={styles.historyCardTopRow}>
+                      <ThemedText style={styles.historyRoute}>
+                        {entry.sourceLanguage} {'->'} {entry.targetLanguage}
+                      </ThemedText>
+                      <View style={styles.historyBadge}>
+                        <ThemedText style={styles.historyBadgeText}>
+                          {entry.origin === 'speech' ? ui.speechHistoryBadge : ui.textHistoryBadge}
+                        </ThemedText>
+                      </View>
+                    </View>
+                    <ThemedText style={styles.historySourceText} numberOfLines={2}>
+                      {entry.transcribedText ?? entry.sourceText}
+                    </ThemedText>
+                    <ThemedText style={styles.historyTranslatedText} numberOfLines={2}>
+                      {entry.translatedText}
+                    </ThemedText>
+                  </Pressable>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.historyEmptyCard}>
+                <ThemedText style={styles.historyEmptyTitle}>{ui.historyEmptyTitle}</ThemedText>
+                <ThemedText style={styles.historyEmptyMessage}>{ui.historyEmptyMessage}</ThemedText>
+              </View>
+            )}
+          </View>
         </Animated.View>
       </ScrollView>
 
@@ -784,7 +1451,16 @@ export default function HomeScreen() {
   );
 }
 
-function getStatusTone(uiStatus: UiStatus, ui: ReturnType<typeof getUiCopy>) {
+function getStatusTone(
+  uiStatus: UiStatus,
+  backendStatus: BackendStatus,
+  isRefreshingBackend: boolean,
+  ui: ReturnType<typeof getUiCopy>,
+) {
+  if (isRefreshingBackend) {
+    return { color: ACCENT_STRONG, label: ui.backendCheckingTitle, hint: ui.backendCheckingMessage };
+  }
+
   switch (uiStatus) {
     case 'recording':
       return { color: DANGER, label: ui.statusListening, hint: ui.statusHintListening };
@@ -798,7 +1474,73 @@ function getStatusTone(uiStatus: UiStatus, ui: ReturnType<typeof getUiCopy>) {
     case 'error':
       return { color: DANGER, label: ui.statusError, hint: ui.statusHintError };
     default:
-      return { color: SUCCESS, label: ui.statusReady, hint: ui.statusHintReady };
+      switch (backendStatus) {
+        case 'warming_up':
+          return { color: ACCENT_STRONG, label: ui.backendWarmingTitle, hint: ui.backendWarmingMessage };
+        case 'offline':
+          return { color: DANGER, label: ui.backendOfflineTitle, hint: ui.backendOfflineMessage };
+        case 'unauthorized':
+          return { color: DANGER, label: ui.backendUnauthorizedTitle, hint: ui.backendUnauthorizedMessage };
+        case 'error':
+          return { color: DANGER, label: ui.backendErrorTitle, hint: ui.backendErrorMessage };
+        default:
+          return { color: SUCCESS, label: ui.statusReady, hint: ui.statusHintReady };
+      }
+  }
+}
+
+function getBackendTone(
+  backendStatus: BackendStatus,
+  isRefreshingBackend: boolean,
+  lastCheckedAt: string | null,
+  ui: ReturnType<typeof getUiCopy>,
+) {
+  if (isRefreshingBackend) {
+    return {
+      title: ui.backendCheckingTitle,
+      message: ui.backendCheckingMessage,
+      actionLabel: ui.backendRefresh,
+      meta: lastCheckedAt,
+    };
+  }
+
+  switch (backendStatus) {
+    case 'ready':
+      return {
+        title: ui.backendReadyTitle,
+        message: ui.backendReadyMessage,
+        actionLabel: ui.backendRefresh,
+        meta: lastCheckedAt,
+      };
+    case 'warming_up':
+      return {
+        title: ui.backendWarmingTitle,
+        message: ui.backendWarmingMessage,
+        actionLabel: ui.backendRefresh,
+        meta: lastCheckedAt,
+      };
+    case 'unauthorized':
+      return {
+        title: ui.backendUnauthorizedTitle,
+        message: ui.backendUnauthorizedMessage,
+        actionLabel: ui.backendRefresh,
+        meta: lastCheckedAt,
+      };
+    case 'error':
+      return {
+        title: ui.backendErrorTitle,
+        message: ui.backendErrorMessage,
+        actionLabel: ui.backendRefresh,
+        meta: lastCheckedAt,
+      };
+    case 'offline':
+    default:
+      return {
+        title: ui.backendOfflineTitle,
+        message: ui.backendOfflineMessage,
+        actionLabel: ui.backendRefresh,
+        meta: lastCheckedAt,
+      };
   }
 }
 
@@ -1032,6 +1774,48 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 6,
   },
+  backendNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(123, 196, 255, 0.24)',
+    backgroundColor: 'rgba(123, 196, 255, 0.08)',
+    padding: 14,
+  },
+  backendNoticeCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  backendNoticeTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  backendNoticeMessage: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  backendNoticeMeta: {
+    color: INFO,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  backendNoticeButton: {
+    borderRadius: 999,
+    backgroundColor: ACCENT_STRONG,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  backendNoticeButtonText: {
+    color: PANEL_ALT,
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1085,6 +1869,131 @@ const styles = StyleSheet.create({
     color: TEXT_PRIMARY,
     fontSize: 12,
     lineHeight: 16,
+  },
+  onboardingCard: {
+    backgroundColor: 'rgba(123, 196, 255, 0.12)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(123, 196, 255, 0.28)',
+    padding: 14,
+    gap: 12,
+  },
+  onboardingCopy: {
+    gap: 4,
+  },
+  onboardingTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  onboardingMessage: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  onboardingButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: 'rgba(7, 19, 23, 0.45)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  onboardingButtonText: {
+    color: TEXT_PRIMARY,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  permissionHintCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: 'rgba(255, 141, 122, 0.08)',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 141, 122, 0.22)',
+    padding: 14,
+  },
+  permissionHintText: {
+    flex: 1,
+    color: TEXT_PRIMARY,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  modeSwitcher: {
+    flexDirection: 'row',
+    gap: 10,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: 'rgba(7, 19, 23, 0.45)',
+    padding: 4,
+  },
+  modeChip: {
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  modeChipActive: {
+    backgroundColor: ACCENT_STRONG,
+  },
+  modeChipText: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  modeChipTextActive: {
+    color: PANEL_ALT,
+  },
+  presetSection: {
+    gap: 10,
+  },
+  presetSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  presetSectionCopy: {
+    gap: 4,
+  },
+  presetSectionTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  presetSectionHint: {
+    color: TEXT_MUTED,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  presetRail: {
+    gap: 10,
+    paddingRight: 4,
+  },
+  presetChip: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 233, 214, 0.14)',
+    backgroundColor: 'rgba(7, 19, 23, 0.68)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 4,
+    minWidth: 132,
+  },
+  presetChipLabel: {
+    color: TEXT_PRIMARY,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  presetChipMeta: {
+    color: ACCENT_STRONG,
+    fontSize: 11,
+    lineHeight: 14,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   languageRoute: {
     flexDirection: 'row',
@@ -1156,6 +2065,115 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     gap: 12,
+  },
+  conversationCard: {
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: SURFACE_BORDER,
+    backgroundColor: PANEL_ALT,
+    padding: 16,
+    gap: 12,
+  },
+  conversationHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  conversationHeaderCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  conversationTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '700',
+    fontFamily: Fonts.serif,
+  },
+  conversationSubtitle: {
+    color: TEXT_MUTED,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  conversationRetryButton: {
+    borderRadius: 999,
+    backgroundColor: ACCENT_STRONG,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  conversationRetryButtonDisabled: {
+    opacity: 0.45,
+  },
+  conversationRetryText: {
+    color: PANEL_ALT,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  conversationHint: {
+    color: INFO,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  conversationList: {
+    gap: 10,
+  },
+  conversationTurnCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 233, 214, 0.1)',
+    backgroundColor: 'rgba(7, 19, 23, 0.4)',
+    padding: 12,
+    gap: 8,
+  },
+  conversationTurnHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  conversationTurnLabel: {
+    color: ACCENT_STRONG,
+    fontSize: 11,
+    lineHeight: 14,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    fontFamily: Fonts.rounded,
+  },
+  conversationTurnRoute: {
+    color: TEXT_MUTED,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  conversationTurnSource: {
+    color: TEXT_PRIMARY,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  conversationTurnTranslated: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  conversationEmptyCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(239, 233, 214, 0.16)',
+    padding: 14,
+    gap: 4,
+  },
+  conversationEmptyTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  conversationEmptyMessage: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 18,
   },
   actionButton: {
     flex: 1,
@@ -1255,6 +2273,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
   },
+  transcriptCard: {
+    gap: 12,
+  },
   smallActionButton: {
     minWidth: 76,
     flexDirection: 'row',
@@ -1278,6 +2299,27 @@ const styles = StyleSheet.create({
   },
   smallActionLabelDisabled: {
     color: TEXT_MUTED,
+  },
+  secondaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: SURFACE_BORDER,
+    backgroundColor: PANEL_ALT,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  secondaryButtonDisabled: {
+    opacity: 0.5,
+  },
+  secondaryButtonText: {
+    color: TEXT_PRIMARY,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   translateButton: {
     backgroundColor: ACCENT,
@@ -1312,6 +2354,103 @@ const styles = StyleSheet.create({
     color: 'rgba(13, 27, 31, 0.74)',
     fontSize: 12,
     lineHeight: 16,
+  },
+  historySection: {
+    gap: 12,
+  },
+  historyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  historyTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '700',
+    fontFamily: Fonts.serif,
+  },
+  historyClearButton: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: SURFACE_BORDER,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: PANEL_ALT,
+  },
+  historyClearButtonText: {
+    color: TEXT_PRIMARY,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  historyList: {
+    gap: 10,
+  },
+  historyCard: {
+    backgroundColor: SURFACE,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: SURFACE_BORDER,
+    padding: 16,
+    gap: 8,
+  },
+  historyCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  historyRoute: {
+    flex: 1,
+    color: TEXT_PRIMARY,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  historyBadge: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(242, 166, 90, 0.16)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  historyBadgeText: {
+    color: ACCENT_STRONG,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  historySourceText: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  historyTranslatedText: {
+    color: TEXT_PRIMARY,
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  historyEmptyCard: {
+    backgroundColor: SURFACE,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: SURFACE_BORDER,
+    padding: 18,
+    gap: 6,
+  },
+  historyEmptyTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600',
+  },
+  historyEmptyMessage: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 19,
   },
   modalBackdrop: {
     flex: 1,

@@ -37,6 +37,13 @@ export type ApiErrorCode =
   | 'audio_unavailable'
   | 'unauthorized';
 
+export type BackendStatus = 'ready' | 'warming_up' | 'offline' | 'unauthorized' | 'error';
+
+export type BackendStatusSnapshot = {
+  status: BackendStatus;
+  checkedAt: string;
+};
+
 export class ApiError extends Error {
   code: ApiErrorCode;
   status?: number;
@@ -73,6 +80,63 @@ function isAbortError(error: unknown): boolean {
 
 function isNetworkFailure(error: unknown): boolean {
   return error instanceof TypeError;
+}
+
+async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isUnauthorizedStatus(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
+async function probePath(path: '/health' | '/ready'): Promise<Response | null> {
+  try {
+    return await fetchWithTimeout(`${API_BASE_URL}${path}`, {
+      headers: withApiKey(),
+    });
+  } catch (error) {
+    if (isAbortError(error) || isNetworkFailure(error)) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+export async function probeBackendStatus(): Promise<BackendStatusSnapshot> {
+  const checkedAt = new Date().toISOString();
+
+  const readyResponse = await probePath('/ready');
+  if (readyResponse?.ok) {
+    return { status: 'ready', checkedAt };
+  }
+
+  if (readyResponse && isUnauthorizedStatus(readyResponse.status)) {
+    return { status: 'unauthorized', checkedAt };
+  }
+
+  const healthResponse = await probePath('/health');
+  if (healthResponse?.ok) {
+    return { status: 'warming_up', checkedAt };
+  }
+
+  if (healthResponse && isUnauthorizedStatus(healthResponse.status)) {
+    return { status: 'unauthorized', checkedAt };
+  }
+
+  if (!readyResponse && !healthResponse) {
+    return { status: 'offline', checkedAt };
+  }
+
+  return { status: 'error', checkedAt };
 }
 
 async function requestJson<T>(
