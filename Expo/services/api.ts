@@ -29,6 +29,26 @@ export type TranslationResponse = {
   audio_url?: string | null;
 };
 
+export type ApiErrorCode =
+  | 'backend_unreachable'
+  | 'network_failed'
+  | 'translation_failed'
+  | 'speech_translation_failed'
+  | 'audio_unavailable'
+  | 'unauthorized';
+
+export class ApiError extends Error {
+  code: ApiErrorCode;
+  status?: number;
+
+  constructor(code: ApiErrorCode, message: string, status?: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
 function withApiKey(headers: Record<string, string> = {}): Record<string, string> {
   if (!envApiKey) {
     return headers;
@@ -38,6 +58,60 @@ function withApiKey(headers: Record<string, string> = {}): Record<string, string
     ...headers,
     'X-API-Key': envApiKey,
   };
+}
+
+function mapErrorCode(operation: 'languages' | 'text' | 'speech' | 'audio', status?: number): ApiErrorCode {
+  if (status === 401 || status === 403) return 'unauthorized';
+  if (operation === 'speech') return 'speech_translation_failed';
+  if (operation === 'audio') return 'audio_unavailable';
+  return 'translation_failed';
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function isNetworkFailure(error: unknown): boolean {
+  return error instanceof TypeError;
+}
+
+async function requestJson<T>(
+  input: string,
+  init: RequestInit,
+  operation: 'languages' | 'text' | 'speech',
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(input, { ...init, signal: controller.signal });
+
+    if (!res.ok) {
+      throw new ApiError(
+        mapErrorCode(operation, res.status),
+        `${operation} request failed`,
+        res.status,
+      );
+    }
+
+    return (await res.json()) as T;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    if (isAbortError(error)) {
+      throw new ApiError('network_failed', `${operation} request timed out`);
+    }
+
+    if (isNetworkFailure(error)) {
+      throw new ApiError('backend_unreachable', `${operation} request could not reach backend`);
+    }
+
+    throw new ApiError(mapErrorCode(operation), `${operation} request failed`);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function inferAudioMimeType(uri: string): string {
@@ -65,16 +139,12 @@ export function createNativeAudioUpload(uri: string): NativeAudioUpload {
 }
 
 export async function fetchSupportedLanguages(): Promise<SupportedLanguage[]> {
-  const res = await fetch(`${API_BASE_URL}/languages`, {
+  const payload = await requestJson<unknown>(`${API_BASE_URL}/languages`, {
     headers: withApiKey(),
-  });
-  if (!res.ok) {
-    throw new Error(`Language fetch failed (${res.status})`);
-  }
+  }, 'languages');
 
-  const payload: unknown = await res.json();
   if (!Array.isArray(payload)) {
-    throw new Error('Language fetch returned invalid payload');
+    throw new ApiError('translation_failed', 'Language fetch returned invalid payload');
   }
 
   return payload.filter((item): item is SupportedLanguage => typeof item === 'string');
@@ -86,7 +156,7 @@ export async function translateText(params: {
   targetLanguage: SupportedLanguage;
   includeSpeech?: boolean;
 }): Promise<TranslationResponse> {
-  const res = await fetch(`${API_BASE_URL}/translate/text`, {
+  return requestJson<TranslationResponse>(`${API_BASE_URL}/translate/text`, {
     method: 'POST',
     headers: withApiKey({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
@@ -95,13 +165,7 @@ export async function translateText(params: {
       target_language: params.targetLanguage,
       include_speech: params.includeSpeech ?? false,
     }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Text translation failed (${res.status})`);
-  }
-
-  return res.json();
+  }, 'text');
 }
 
 export async function translateSpeech(params: {
@@ -120,17 +184,11 @@ export async function translateSpeech(params: {
   data.append('target_language', params.targetLanguage);
   data.append('include_speech', String(params.includeSpeech ?? false));
 
-  const res = await fetch(`${API_BASE_URL}/translate/speech`, {
+  return requestJson<TranslationResponse>(`${API_BASE_URL}/translate/speech`, {
     method: 'POST',
     headers: withApiKey(),
     body: data,
-  });
-
-  if (!res.ok) {
-    throw new Error(`Speech translation failed (${res.status})`);
-  }
-
-  return res.json();
+  }, 'speech');
 }
 
 export function toAbsoluteAudioUrl(audioUrl?: string | null): string | undefined {

@@ -2,6 +2,10 @@ type UiCopy = {
   statusReady: string;
   statusListening: string;
   statusWorking: string;
+  statusPlaying: string;
+  statusBackendUnavailable: string;
+  statusError: string;
+  statusSaved: string;
   languageWord: string;
   from: string;
   to: string;
@@ -20,6 +24,32 @@ type UiCopy = {
   inputPlaceholder: string;
   translate: string;
   translating: string;
+  retry: string;
+  copy: string;
+  share: string;
+  swap: string;
+  copied: string;
+  shared: string;
+  playingAction: string;
+  statusLabel: string;
+  statusHintReady: string;
+  statusHintListening: string;
+  statusHintWorking: string;
+  statusHintPlaying: string;
+  statusHintBackendUnavailable: string;
+  statusHintError: string;
+  errorBackendUnavailableTitle: string;
+  errorBackendUnavailableMessage: string;
+  errorNetworkFailedTitle: string;
+  errorNetworkFailedMessage: string;
+  errorTranslationFailedTitle: string;
+  errorTranslationFailedMessage: string;
+  errorSpeechFailedTitle: string;
+  errorSpeechFailedMessage: string;
+  errorUnauthorizedTitle: string;
+  errorUnauthorizedMessage: string;
+  errorAudioUnavailableTitle: string;
+  errorAudioUnavailableMessage: string;
   chooseLanguage: string;
   searchLanguage: string;
   noLanguageFound: string;
@@ -39,6 +69,10 @@ const ENGLISH_UI: UiCopy = {
   statusReady: 'Ready',
   statusListening: 'Listening',
   statusWorking: 'Translating',
+  statusPlaying: 'Playing audio',
+  statusBackendUnavailable: 'Backend unavailable',
+  statusError: 'Needs attention',
+  statusSaved: 'Preferences restored',
   languageWord: 'languages',
   from: 'From',
   to: 'To',
@@ -57,6 +91,32 @@ const ENGLISH_UI: UiCopy = {
   inputPlaceholder: 'Type here',
   translate: 'Translate',
   translating: 'Translating',
+  retry: 'Retry',
+  copy: 'Copy',
+  share: 'Share',
+  swap: 'Swap',
+  copied: 'Copied',
+  shared: 'Ready to share',
+  playingAction: 'Play',
+  statusLabel: 'Status',
+  statusHintReady: 'Choose languages, type or speak, then translate.',
+  statusHintListening: 'Recording is active. Tap stop to translate what you said.',
+  statusHintWorking: 'Your request is in progress.',
+  statusHintPlaying: 'Voice playback is active.',
+  statusHintBackendUnavailable: 'The app cannot reach the translation backend right now.',
+  statusHintError: 'Review the message below and try again.',
+  errorBackendUnavailableTitle: 'Backend unavailable',
+  errorBackendUnavailableMessage: 'Check that the translation server is running, then retry.',
+  errorNetworkFailedTitle: 'Network issue',
+  errorNetworkFailedMessage: 'The request timed out or the connection dropped. Retry in a moment.',
+  errorTranslationFailedTitle: 'Translation failed',
+  errorTranslationFailedMessage: 'The app could not complete this translation. Please retry.',
+  errorSpeechFailedTitle: 'Speech translation failed',
+  errorSpeechFailedMessage: 'The recording was captured, but speech translation did not complete.',
+  errorUnauthorizedTitle: 'Backend access blocked',
+  errorUnauthorizedMessage: 'Check the API key configuration for this environment.',
+  errorAudioUnavailableTitle: 'Audio unavailable',
+  errorAudioUnavailableMessage: 'Voice playback could not be prepared for this result.',
   chooseLanguage: 'Choose language',
   searchLanguage: 'Search language',
   noLanguageFound: 'No language found',

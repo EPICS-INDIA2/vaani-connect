@@ -1,4 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import * as Clipboard from 'expo-clipboard';
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
@@ -16,6 +17,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   TextInput,
   View,
@@ -28,7 +30,8 @@ import { getLanguageLabel, SUPPORTED_LANGUAGES, type SupportedLanguage } from '@
 import { Fonts } from '@/constants/theme';
 import { getUiCopy, UI_SUBTITLES } from '@/constants/ui-copy';
 import {
-  API_BASE_URL,
+  ApiError,
+  type ApiErrorCode,
   createNativeAudioUpload,
   fetchSupportedLanguages,
   toAbsoluteAudioUrl,
@@ -36,6 +39,7 @@ import {
   translateText,
   type TranslationResponse,
 } from '@/services/api';
+import { loadStoredPreferences, saveStoredPreferences } from '@/services/preferences';
 
 const SURFACE = '#10242a';
 const SURFACE_BORDER = 'rgba(233, 228, 212, 0.12)';
@@ -47,23 +51,70 @@ const TEXT_PRIMARY = '#f7f2e8';
 const TEXT_MUTED = '#aebcb7';
 const SUCCESS = '#8fd19e';
 const DANGER = '#ff8d7a';
+const INFO = '#7bc4ff';
 const RESULT_CARD_SCROLL_Y = 0;
+const DEFAULT_SOURCE_LANGUAGE: SupportedLanguage = 'English';
+const DEFAULT_TARGET_LANGUAGE: SupportedLanguage = 'Hindi';
 
 type LanguageField = 'source' | 'target';
+type UiStatus =
+  | 'ready'
+  | 'recording'
+  | 'translating_text'
+  | 'translating_speech'
+  | 'playing_audio'
+  | 'backend_unavailable'
+  | 'error';
+
+type BannerMessage = {
+  code: ApiErrorCode;
+  title: string;
+  message: string;
+};
+
+function resolveInitialPair(
+  languages: SupportedLanguage[],
+  stored?: Partial<Record<'sourceLanguage' | 'targetLanguage', SupportedLanguage>> | null,
+) {
+  const preferredSource = stored?.sourceLanguage;
+  const preferredTarget = stored?.targetLanguage;
+  const fallbackSource = languages.includes(DEFAULT_SOURCE_LANGUAGE)
+    ? DEFAULT_SOURCE_LANGUAGE
+    : languages[0] ?? DEFAULT_SOURCE_LANGUAGE;
+  const fallbackTarget =
+    languages.includes(DEFAULT_TARGET_LANGUAGE) && DEFAULT_TARGET_LANGUAGE !== fallbackSource
+      ? DEFAULT_TARGET_LANGUAGE
+      : languages.find((item) => item !== fallbackSource) ?? fallbackSource;
+
+  const sourceLanguage =
+    preferredSource && languages.includes(preferredSource) ? preferredSource : fallbackSource;
+  const targetLanguage =
+    preferredTarget && languages.includes(preferredTarget) && preferredTarget !== sourceLanguage
+      ? preferredTarget
+      : languages.find((item) => item !== sourceLanguage && item === fallbackTarget) ??
+        languages.find((item) => item !== sourceLanguage) ??
+        sourceLanguage;
+
+  return { sourceLanguage, targetLanguage };
+}
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [availableLanguages, setAvailableLanguages] = useState<SupportedLanguage[]>([...SUPPORTED_LANGUAGES]);
-  const [sourceLanguage, setSourceLanguage] = useState<SupportedLanguage>('English');
-  const [targetLanguage, setTargetLanguage] = useState<SupportedLanguage>('Hindi');
+  const [sourceLanguage, setSourceLanguage] = useState<SupportedLanguage>(DEFAULT_SOURCE_LANGUAGE);
+  const [targetLanguage, setTargetLanguage] = useState<SupportedLanguage>(DEFAULT_TARGET_LANGUAGE);
   const [inputText, setInputText] = useState('');
   const [outputText, setOutputText] = useState('');
   const [latestAudioUrl, setLatestAudioUrl] = useState<string | null>(null);
+  const [uiStatus, setUiStatus] = useState<UiStatus>('ready');
   const [isTranslatingText, setIsTranslatingText] = useState(false);
   const [isTranslatingSpeech, setIsTranslatingSpeech] = useState(false);
   const [languagePickerField, setLanguagePickerField] = useState<LanguageField | null>(null);
   const [languageQuery, setLanguageQuery] = useState('');
+  const [banner, setBanner] = useState<BannerMessage | null>(null);
+  const [flashMessage, setFlashMessage] = useState<string | null>(null);
+  const [didRestorePreferences, setDidRestorePreferences] = useState(false);
 
   const scrollRef = useRef<ScrollView | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -92,19 +143,41 @@ export default function HomeScreen() {
     let isMounted = true;
 
     async function loadLanguages() {
+      const storedPreferences = await loadStoredPreferences();
+
       try {
         const fetched = await fetchSupportedLanguages();
         if (!isMounted || fetched.length === 0) return;
 
         setAvailableLanguages(fetched);
-        setSourceLanguage((current) => (fetched.includes(current) ? current : fetched.includes('English') ? 'English' : fetched[0]));
-        setTargetLanguage((current) => (fetched.includes(current) ? current : fetched.find((item) => item !== 'English') ?? fetched[0]));
-      } catch {
-        // Keep fallback language list when backend language endpoint is unavailable.
+        const nextPair = resolveInitialPair(fetched, storedPreferences);
+        setSourceLanguage(nextPair.sourceLanguage);
+        setTargetLanguage(nextPair.targetLanguage);
+        setBanner(null);
+      } catch (error) {
+        if (!isMounted) return;
+
+        const fallbackPair = resolveInitialPair([...SUPPORTED_LANGUAGES], storedPreferences);
+        setSourceLanguage(fallbackPair.sourceLanguage);
+        setTargetLanguage(fallbackPair.targetLanguage);
+
+        if (error instanceof ApiError && error.code === 'backend_unreachable') {
+          const fallbackUi = getUiCopy(fallbackPair.sourceLanguage);
+          setBanner({
+            code: 'backend_unreachable',
+            title: fallbackUi.errorBackendUnavailableTitle,
+            message: fallbackUi.errorBackendUnavailableMessage,
+          });
+        }
+      } finally {
+        if (isMounted) {
+          setDidRestorePreferences(Boolean(storedPreferences));
+        }
       }
     }
 
-    loadLanguages();
+    void loadLanguages();
+
     return () => {
       isMounted = false;
     };
@@ -120,6 +193,58 @@ export default function HomeScreen() {
     });
   }, []);
 
+  useEffect(() => {
+    void saveStoredPreferences({ sourceLanguage, targetLanguage });
+  }, [sourceLanguage, targetLanguage]);
+
+  useEffect(() => {
+    if (!flashMessage) return undefined;
+
+    const timeout = setTimeout(() => setFlashMessage(null), 1800);
+    return () => clearTimeout(timeout);
+  }, [flashMessage]);
+
+  useEffect(() => {
+    if (playerStatus.playing || playerStatus.isBuffering) {
+      setUiStatus('playing_audio');
+      return;
+    }
+
+    if (recorderState.isRecording) {
+      setUiStatus('recording');
+      return;
+    }
+
+    if (isTranslatingSpeech) {
+      setUiStatus('translating_speech');
+      return;
+    }
+
+    if (isTranslatingText) {
+      setUiStatus('translating_text');
+      return;
+    }
+
+    if (banner?.code === 'backend_unreachable') {
+      setUiStatus('backend_unavailable');
+      return;
+    }
+
+    if (banner) {
+      setUiStatus('error');
+      return;
+    }
+
+    setUiStatus('ready');
+  }, [
+    banner,
+    isTranslatingSpeech,
+    isTranslatingText,
+    playerStatus.isBuffering,
+    playerStatus.playing,
+    recorderState.isRecording,
+  ]);
+
   const activeRequest = isTranslatingText || isTranslatingSpeech;
   const canTranslateText = useMemo(
     () => inputText.trim().length > 0 && !isTranslatingSpeech,
@@ -128,12 +253,6 @@ export default function HomeScreen() {
   const compactLayout = width < 410;
   const ui = useMemo(() => getUiCopy(sourceLanguage), [sourceLanguage]);
   const isRecording = recorderState.isRecording;
-  const isPlayingAudio = playerStatus.playing || playerStatus.isBuffering;
-  const statusTone = isRecording
-    ? { color: DANGER, label: ui.statusListening }
-    : activeRequest
-      ? { color: ACCENT_STRONG, label: ui.statusWorking }
-      : { color: SUCCESS, label: ui.statusReady };
   const pickerSelection = languagePickerField === 'target' ? targetLanguage : sourceLanguage;
   const filteredLanguages = useMemo(() => {
     const query = languageQuery.trim().toLowerCase();
@@ -145,10 +264,63 @@ export default function HomeScreen() {
     });
   }, [availableLanguages, languageQuery]);
   const hasResult = outputText.trim().length > 0 || isTranslatingText || isTranslatingSpeech;
+  const statusTone = getStatusTone(uiStatus, ui);
+
+  function clearFeedback() {
+    setBanner(null);
+    setFlashMessage(null);
+  }
+
+  function getBannerForError(code: ApiErrorCode): BannerMessage {
+    switch (code) {
+      case 'backend_unreachable':
+        return {
+          code,
+          title: ui.errorBackendUnavailableTitle,
+          message: ui.errorBackendUnavailableMessage,
+        };
+      case 'network_failed':
+        return {
+          code,
+          title: ui.errorNetworkFailedTitle,
+          message: ui.errorNetworkFailedMessage,
+        };
+      case 'speech_translation_failed':
+        return {
+          code,
+          title: ui.errorSpeechFailedTitle,
+          message: ui.errorSpeechFailedMessage,
+        };
+      case 'unauthorized':
+        return {
+          code,
+          title: ui.errorUnauthorizedTitle,
+          message: ui.errorUnauthorizedMessage,
+        };
+      case 'audio_unavailable':
+        return {
+          code,
+          title: ui.errorAudioUnavailableTitle,
+          message: ui.errorAudioUnavailableMessage,
+        };
+      default:
+        return {
+          code,
+          title: ui.errorTranslationFailedTitle,
+          message: ui.errorTranslationFailedMessage,
+        };
+    }
+  }
+
+  function captureError(error: unknown, fallback: ApiErrorCode) {
+    const code = error instanceof ApiError ? error.code : fallback;
+    setBanner(getBannerForError(code));
+  }
 
   async function translateFromText() {
     if (!inputText.trim()) return;
 
+    clearFeedback();
     setIsTranslatingText(true);
     try {
       const response = await translateText({
@@ -158,8 +330,8 @@ export default function HomeScreen() {
         includeSpeech: false,
       });
       applyTranslation(response);
-    } catch {
-      Alert.alert(ui.alertTranslateFailedTitle, API_BASE_URL);
+    } catch (error) {
+      captureError(error, 'translation_failed');
     } finally {
       setIsTranslatingText(false);
     }
@@ -176,6 +348,7 @@ export default function HomeScreen() {
 
     setOutputText(response.translated_text);
     setLatestAudioUrl(response.audio_url ?? null);
+    setBanner(null);
 
     requestAnimationFrame(() => {
       scrollRef.current?.scrollTo({ y: RESULT_CARD_SCROLL_Y, animated: true });
@@ -183,6 +356,8 @@ export default function HomeScreen() {
   }
 
   async function toggleRecording() {
+    clearFeedback();
+
     if (!isRecording) {
       try {
         const permission = await requestRecordingPermissionsAsync();
@@ -224,7 +399,7 @@ export default function HomeScreen() {
 
       const recordedUri = recorder.uri ?? recorder.getStatus().url;
       if (!recordedUri) {
-        throw new Error('Recording URI unavailable');
+        throw new ApiError('speech_translation_failed', 'Recording URI unavailable');
       }
 
       const response = await translateSpeech({
@@ -234,45 +409,51 @@ export default function HomeScreen() {
         includeSpeech: false,
       });
       applyTranslation(response);
-    } catch {
-      Alert.alert(ui.alertSpeechFailedTitle, API_BASE_URL);
+    } catch (error) {
+      captureError(error, 'speech_translation_failed');
     } finally {
       setIsTranslatingSpeech(false);
     }
   }
 
   async function playOutputAudio() {
+    clearFeedback();
+
     const absolute = toAbsoluteAudioUrl(latestAudioUrl);
-
-    if (!absolute) {
-      if (!outputText.trim()) {
-        Alert.alert(ui.alertNoOutputTitle, ui.alertNoOutputMessage);
-        return;
-      }
-
-      try {
-        setIsTranslatingText(true);
-        const response = await translateText({
-          text: inputText.trim(),
-          sourceLanguage,
-          targetLanguage,
-          includeSpeech: true,
-        });
-        applyTranslation(response);
-        const generatedAudioUrl = toAbsoluteAudioUrl(response.audio_url);
-        if (generatedAudioUrl) {
-          await playAudio(generatedAudioUrl);
-        }
-      } catch {
-        Alert.alert(ui.alertVoiceUnavailableTitle, API_BASE_URL);
-      } finally {
-        setIsTranslatingText(false);
-      }
-
+    if (absolute) {
+      await playAudio(absolute);
       return;
     }
 
-    await playAudio(absolute);
+    if (!outputText.trim()) {
+      setBanner({
+        code: 'audio_unavailable',
+        title: ui.alertNoOutputTitle,
+        message: ui.alertNoOutputMessage,
+      });
+      return;
+    }
+
+    try {
+      setIsTranslatingText(true);
+      const response = await translateText({
+        text: inputText.trim(),
+        sourceLanguage,
+        targetLanguage,
+        includeSpeech: true,
+      });
+      applyTranslation(response);
+      const generatedAudioUrl = toAbsoluteAudioUrl(response.audio_url);
+      if (!generatedAudioUrl) {
+        throw new ApiError('audio_unavailable', 'Audio URL missing after generation');
+      }
+
+      await playAudio(generatedAudioUrl);
+    } catch (error) {
+      captureError(error, 'audio_unavailable');
+    } finally {
+      setIsTranslatingText(false);
+    }
   }
 
   async function playAudio(audioUrl: string) {
@@ -286,14 +467,17 @@ export default function HomeScreen() {
       });
       player.replace({ uri: audioUrl });
       player.play();
-    } catch {
-      Alert.alert(ui.alertVoiceUnavailableTitle, API_BASE_URL);
+      setBanner(null);
+    } catch (error) {
+      captureError(error, 'audio_unavailable');
     }
   }
 
   function switchLanguages() {
-    setInputText(outputText);
-    setOutputText(inputText);
+    clearFeedback();
+    const nextInput = outputText.trim() ? outputText : inputText;
+    setInputText(nextInput);
+    setOutputText('');
     setLatestAudioUrl(null);
     setSourceLanguage(targetLanguage);
     setTargetLanguage(sourceLanguage);
@@ -310,13 +494,62 @@ export default function HomeScreen() {
   }
 
   function handleLanguageSelect(language: SupportedLanguage) {
+    clearFeedback();
+
     if (languagePickerField === 'source') {
       setSourceLanguage(language);
+      if (language === targetLanguage) {
+        setTargetLanguage(availableLanguages.find((item) => item !== language) ?? targetLanguage);
+      }
     } else if (languagePickerField === 'target') {
       setTargetLanguage(language);
+      if (language === sourceLanguage) {
+        setSourceLanguage(availableLanguages.find((item) => item !== language) ?? sourceLanguage);
+      }
     }
 
     closeLanguagePicker();
+  }
+
+  async function copyOutputText() {
+    if (!outputText.trim()) return;
+
+    await Clipboard.setStringAsync(outputText);
+    setFlashMessage(ui.copied);
+  }
+
+  async function shareOutputText() {
+    if (!outputText.trim()) return;
+
+    await Share.share({
+      message: `${sourceLanguage} -> ${targetLanguage}\n\n${outputText}`,
+      title: 'Vaani Connect Translation',
+    });
+    setFlashMessage(ui.shared);
+  }
+
+  async function retryBannerAction() {
+    if (!banner) return;
+
+    if (banner.code === 'audio_unavailable') {
+      await playOutputAudio();
+      return;
+    }
+
+    if (inputText.trim()) {
+      await translateFromText();
+      return;
+    }
+
+    try {
+      const fetched = await fetchSupportedLanguages();
+      if (fetched.length > 0) {
+        setAvailableLanguages(fetched);
+      }
+      setBanner(null);
+    } catch (error) {
+      captureError(error, 'backend_unreachable');
+    }
   }
 
   return (
@@ -354,6 +587,32 @@ export default function HomeScreen() {
               </ThemedText>
             </View>
 
+            <View style={styles.statusCard}>
+              <ThemedText style={styles.statusCardLabel}>{ui.statusLabel}</ThemedText>
+              <ThemedText style={styles.statusCardTitle}>{statusTone.label}</ThemedText>
+              <ThemedText style={styles.statusCardCopy}>{statusTone.hint}</ThemedText>
+              {didRestorePreferences ? <ThemedText style={styles.statusCardMeta}>{ui.statusSaved}</ThemedText> : null}
+            </View>
+
+            {banner ? (
+              <View style={styles.banner}>
+                <View style={styles.bannerCopy}>
+                  <ThemedText style={styles.bannerTitle}>{banner.title}</ThemedText>
+                  <ThemedText style={styles.bannerMessage}>{banner.message}</ThemedText>
+                </View>
+                <Pressable style={styles.bannerButton} onPress={() => void retryBannerAction()}>
+                  <ThemedText style={styles.bannerButtonText}>{ui.retry}</ThemedText>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {flashMessage ? (
+              <View style={styles.flashPill}>
+                <MaterialIcons name="check-circle" size={16} color={SUCCESS} />
+                <ThemedText style={styles.flashText}>{flashMessage}</ThemedText>
+              </View>
+            ) : null}
+
             <View style={[styles.languageRoute, compactLayout && styles.languageRouteCompact]}>
               <LanguageSelector
                 title={ui.from}
@@ -385,29 +644,48 @@ export default function HomeScreen() {
                 disabled={activeRequest}
                 loading={isTranslatingSpeech}
               />
-              <ActionButton
-                icon="play-circle-filled"
-                title={isPlayingAudio ? ui.playing : ui.listen}
-                subtitle={UI_SUBTITLES.listen}
-                accent="#f7d46b"
-                onPress={playOutputAudio}
-                disabled={activeRequest || (!outputText.trim() && !latestAudioUrl)}
-                loading={isPlayingAudio}
-              />
             </View>
           </View>
-
           {hasResult ? (
-            <EditorCard
-              label={ui.resultLabel}
-              title={isTranslatingSpeech ? ui.speechResultTitle : ui.resultTitle}
-              subtitle={UI_SUBTITLES.result}
-              value={outputText}
-              placeholder={ui.resultPlaceholder}
-              editable={false}
-              compact={compactLayout}
-              footer={latestAudioUrl ? ui.voiceReady : ''}
-            />
+            <>
+              <EditorCard
+                label={ui.resultLabel}
+                title={isTranslatingSpeech ? ui.speechResultTitle : ui.resultTitle}
+                subtitle={UI_SUBTITLES.result}
+                value={outputText}
+                placeholder={ui.resultPlaceholder}
+                editable={false}
+                compact={compactLayout}
+                footer={latestAudioUrl ? ui.voiceReady : ''}
+              />
+
+              <View style={styles.resultActions}>
+                <SmallActionButton
+                  icon="play-circle-filled"
+                  title={ui.playingAction}
+                  onPress={() => void playOutputAudio()}
+                  disabled={activeRequest || !outputText.trim()}
+                />
+                <SmallActionButton
+                  icon="content-copy"
+                  title={ui.copy}
+                  onPress={() => void copyOutputText()}
+                  disabled={!outputText.trim()}
+                />
+                <SmallActionButton
+                  icon="ios-share"
+                  title={ui.share}
+                  onPress={() => void shareOutputText()}
+                  disabled={!outputText.trim()}
+                />
+                <SmallActionButton
+                  icon="swap-horiz"
+                  title={ui.swap}
+                  onPress={switchLanguages}
+                  disabled={activeRequest || (!inputText.trim() && !outputText.trim())}
+                />
+              </View>
+            </>
           ) : null}
 
           <EditorCard
@@ -424,7 +702,7 @@ export default function HomeScreen() {
 
           <Pressable
             style={[styles.translateButton, (!canTranslateText || isTranslatingText) && styles.translateButtonDisabled]}
-            onPress={translateFromText}
+            onPress={() => void translateFromText()}
             disabled={!canTranslateText || isTranslatingText}>
             <View style={styles.translateInner}>
               {isTranslatingText ? (
@@ -506,6 +784,24 @@ export default function HomeScreen() {
   );
 }
 
+function getStatusTone(uiStatus: UiStatus, ui: ReturnType<typeof getUiCopy>) {
+  switch (uiStatus) {
+    case 'recording':
+      return { color: DANGER, label: ui.statusListening, hint: ui.statusHintListening };
+    case 'translating_text':
+    case 'translating_speech':
+      return { color: ACCENT_STRONG, label: ui.statusWorking, hint: ui.statusHintWorking };
+    case 'playing_audio':
+      return { color: INFO, label: ui.statusPlaying, hint: ui.statusHintPlaying };
+    case 'backend_unavailable':
+      return { color: DANGER, label: ui.statusBackendUnavailable, hint: ui.statusHintBackendUnavailable };
+    case 'error':
+      return { color: DANGER, label: ui.statusError, hint: ui.statusHintError };
+    default:
+      return { color: SUCCESS, label: ui.statusReady, hint: ui.statusHintReady };
+  }
+}
+
 function ActionButton({
   icon,
   title,
@@ -532,6 +828,25 @@ function ActionButton({
         <ThemedText style={styles.actionTitle}>{title}</ThemedText>
         <ThemedText style={styles.actionSubtitle}>{subtitle}</ThemedText>
       </View>
+    </Pressable>
+  );
+}
+
+function SmallActionButton({
+  icon,
+  title,
+  onPress,
+  disabled,
+}: {
+  icon: keyof typeof MaterialIcons.glyphMap;
+  title: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Pressable style={[styles.smallActionButton, disabled && styles.smallActionButtonDisabled]} onPress={onPress} disabled={disabled}>
+      <MaterialIcons name={icon} size={18} color={disabled ? TEXT_MUTED : TEXT_PRIMARY} />
+      <ThemedText style={[styles.smallActionLabel, disabled && styles.smallActionLabelDisabled]}>{title}</ThemedText>
     </Pressable>
   );
 }
@@ -682,6 +997,94 @@ const styles = StyleSheet.create({
     color: TEXT_MUTED,
     fontSize: 13,
     lineHeight: 18,
+  },
+  statusCard: {
+    backgroundColor: PANEL_ALT,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: SURFACE_BORDER,
+    padding: 16,
+    gap: 4,
+  },
+  statusCardLabel: {
+    color: ACCENT_STRONG,
+    fontSize: 12,
+    lineHeight: 16,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    fontFamily: Fonts.rounded,
+  },
+  statusCardTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '700',
+    fontFamily: Fonts.serif,
+  },
+  statusCardCopy: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  statusCardMeta: {
+    color: SUCCESS,
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 6,
+  },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(255, 141, 122, 0.08)',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 141, 122, 0.28)',
+    padding: 14,
+  },
+  bannerCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  bannerTitle: {
+    color: TEXT_PRIMARY,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  bannerMessage: {
+    color: TEXT_MUTED,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  bannerButton: {
+    borderRadius: 999,
+    backgroundColor: ACCENT_STRONG,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  bannerButtonText: {
+    color: PANEL_ALT,
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  flashPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: 'rgba(143, 209, 158, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(143, 209, 158, 0.28)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  flashText: {
+    color: TEXT_PRIMARY,
+    fontSize: 12,
+    lineHeight: 16,
   },
   languageRoute: {
     flexDirection: 'row',
@@ -846,6 +1249,35 @@ const styles = StyleSheet.create({
     color: TEXT_MUTED,
     fontSize: 12,
     lineHeight: 16,
+  },
+  resultActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  smallActionButton: {
+    minWidth: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: PANEL_ALT,
+    borderWidth: 1,
+    borderColor: SURFACE_BORDER,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  smallActionButtonDisabled: {
+    opacity: 0.5,
+  },
+  smallActionLabel: {
+    color: TEXT_PRIMARY,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  smallActionLabelDisabled: {
+    color: TEXT_MUTED,
   },
   translateButton: {
     backgroundColor: ACCENT,
