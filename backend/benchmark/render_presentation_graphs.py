@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,70 @@ def _pair_label(row: dict[str, Any]) -> str:
     tgt = row.get("target_language", "")
     tts = " +TTS" if _to_bool(row.get("include_speech")) else ""
     return f"{src}->{tgt}{tts}"
+
+
+def _heatmap_triplet(
+    rows: list[dict[str, str]],
+    value_key: str,
+) -> tuple[list[str], list[str], list[list[float | None]]]:
+    sources = sorted({row.get("source_language", "").strip() for row in rows if row.get("source_language")})
+    targets = sorted({row.get("target_language", "").strip() for row in rows if row.get("target_language")})
+
+    matrix: list[list[float | None]] = []
+    for src in sources:
+        matrix_row: list[float | None] = []
+        for tgt in targets:
+            matching = [
+                row for row in rows
+                if row.get("source_language", "").strip() == src
+                and row.get("target_language", "").strip() == tgt
+            ]
+            if not matching:
+                matrix_row.append(None)
+                continue
+
+            preferred = next((row for row in matching if not _to_bool(row.get("include_speech"))), matching[0])
+            matrix_row.append(_to_float(preferred.get(value_key)))
+        matrix.append(matrix_row)
+    return sources, targets, matrix
+
+
+def _plot_pair_heatmap(
+    pair_rows: list[dict[str, str]],
+    out_path: Path,
+    *,
+    value_key: str,
+    title: str,
+    cmap: str,
+    value_suffix: str,
+) -> None:
+    sources, targets, matrix = _heatmap_triplet(pair_rows, value_key)
+    fig, ax = plt.subplots(figsize=(1.8 + 1.3 * max(1, len(targets)), 1.8 + 0.9 * max(1, len(sources))))
+
+    if not sources or not targets:
+        ax.text(0.5, 0.5, "No language-pair data", ha="center", va="center", fontsize=14)
+        ax.axis("off")
+        _save_fig(fig, out_path)
+        return
+
+    numeric_rows = [[value if value is not None else float("nan") for value in row] for row in matrix]
+    image = ax.imshow(numeric_rows, cmap=cmap, aspect="auto")
+
+    ax.set_xticks(range(len(targets)), targets, rotation=25, ha="right")
+    ax.set_yticks(range(len(sources)), sources)
+    ax.set_xlabel("Target language")
+    ax.set_ylabel("Source language")
+    ax.set_title(title)
+
+    for row_index, row in enumerate(matrix):
+        for col_index, value in enumerate(row):
+            label = "n/a" if value is None else f"{value:.0f}{value_suffix}"
+            text_color = "#f8f9fa" if value is not None else "#5c6770"
+            ax.text(col_index, row_index, label, ha="center", va="center", fontsize=9, color=text_color, fontweight="bold")
+
+    colorbar = fig.colorbar(image, ax=ax, shrink=0.92)
+    colorbar.set_label(f"Value ({value_suffix.strip()})" if value_suffix else "Value")
+    _save_fig(fig, out_path)
 
 
 def _plot_kpi_overview(summary: dict[str, Any], out_path: Path) -> None:
@@ -266,6 +331,100 @@ def _plot_stage_breakdown(raw_rows: list[dict[str, str]], out_path: Path) -> Non
     _save_fig(fig, out_path)
 
 
+def _aggregate_latency_by_language_and_length(
+    raw_rows: list[dict[str, str]],
+) -> dict[str, dict[float, list[float]]]:
+    grouped: dict[str, dict[float, list[float]]] = {}
+    for row in raw_rows:
+        if not _to_bool(row.get("success")):
+            continue
+        language = (row.get("source_language") or "").strip()
+        text_length = _to_float(row.get("input_chars"))
+        latency = _to_float(row.get("client_latency_ms"))
+        if not language or text_length is None or latency is None:
+            continue
+        grouped.setdefault(language, {}).setdefault(text_length, []).append(latency)
+    return grouped
+
+
+def _aggregate_language_latency(raw_rows: list[dict[str, str]]) -> list[tuple[str, float, int]]:
+    grouped: dict[str, list[float]] = {}
+    for row in raw_rows:
+        if not _to_bool(row.get("success")):
+            continue
+        language = (row.get("source_language") or "").strip()
+        latency = _to_float(row.get("client_latency_ms"))
+        if not language or latency is None:
+            continue
+        grouped.setdefault(language, []).append(latency)
+
+    summarized = [
+        (language, statistics.mean(latencies), len(latencies))
+        for language, latencies in grouped.items()
+        if latencies
+    ]
+    summarized.sort(key=lambda item: item[1], reverse=True)
+    return summarized
+
+
+def _plot_length_vs_latency_by_language(raw_rows: list[dict[str, str]], out_path: Path) -> None:
+    grouped = _aggregate_latency_by_language_and_length(raw_rows)
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    if not grouped:
+        ax.text(0.5, 0.5, "No request-level length/latency data found", ha="center", va="center", fontsize=13)
+        ax.axis("off")
+        _save_fig(fig, out_path)
+        return
+
+    cmap = plt.get_cmap("tab10")
+    plotted = 0
+    for index, language in enumerate(sorted(grouped)):
+        per_length = grouped[language]
+        lengths = sorted(per_length)
+        mean_latencies = [statistics.mean(per_length[length]) for length in lengths]
+        ax.plot(
+            lengths,
+            mean_latencies,
+            marker="o",
+            linewidth=2,
+            markersize=5,
+            color=cmap(index % 10),
+            label=language,
+        )
+        plotted += 1
+
+    if plotted == 0:
+        ax.text(0.5, 0.5, "No request-level length/latency data found", ha="center", va="center", fontsize=13)
+        ax.axis("off")
+    else:
+        ax.set_xlabel("Input text length (characters)")
+        ax.set_ylabel("Average client latency (ms)")
+        ax.set_title("Text Length vs Latency by Source Language")
+        ax.legend(title="Language", ncol=2 if plotted > 6 else 1)
+    _save_fig(fig, out_path)
+
+
+def _plot_overall_latency_by_language(raw_rows: list[dict[str, str]], out_path: Path) -> None:
+    summarized = _aggregate_language_latency(raw_rows)
+
+    fig, ax = plt.subplots(figsize=(10, max(5, 0.55 * max(1, len(summarized)))))
+    if not summarized:
+        ax.text(0.5, 0.5, "No language-level latency data found", ha="center", va="center", fontsize=13)
+        ax.axis("off")
+        _save_fig(fig, out_path)
+        return
+
+    labels = [f"{language} (n={count})" for language, _, count in summarized]
+    values = [mean_latency for _, mean_latency, _ in summarized]
+
+    ax.barh(labels, values, color="#3a86ff")
+    ax.invert_yaxis()
+    ax.set_xlabel("Average client latency (ms)")
+    ax.set_title("Overall Latency Comparison by Source Language")
+    _save_fig(fig, out_path)
+
+
 def _write_index_md(out_path: Path, chart_paths: list[Path], summary: dict[str, Any]) -> None:
     totals = summary.get("totals", {})
     lines = [
@@ -327,20 +486,42 @@ def main() -> int:
         plot_dir / "02_latency_percentiles.png",
         plot_dir / "03_pair_p95_latency.png",
         plot_dir / "04_pair_success_rate.png",
-        plot_dir / "05_route_distribution.png",
-        plot_dir / "06_error_distribution.png",
-        plot_dir / "07_client_vs_server_scatter.png",
-        plot_dir / "08_stage_latency_breakdown.png",
+        plot_dir / "05_pair_latency_heatmap.png",
+        plot_dir / "06_pair_success_heatmap.png",
+        plot_dir / "07_route_distribution.png",
+        plot_dir / "08_error_distribution.png",
+        plot_dir / "09_client_vs_server_scatter.png",
+        plot_dir / "10_stage_latency_breakdown.png",
+        plot_dir / "11_length_vs_latency_by_language.png",
+        plot_dir / "12_overall_latency_by_language.png",
     ]
 
     _plot_kpi_overview(summary, chart_paths[0])
     _plot_latency_percentiles(summary, chart_paths[1])
     _plot_pair_latency(pair_rows, chart_paths[2])
     _plot_pair_success(pair_rows, chart_paths[3])
-    _plot_route_distribution(route_rows, chart_paths[4])
-    _plot_error_distribution(error_rows, chart_paths[5])
-    _plot_request_scatter(raw_rows, chart_paths[6])
-    _plot_stage_breakdown(raw_rows, chart_paths[7])
+    _plot_pair_heatmap(
+        pair_rows,
+        chart_paths[4],
+        value_key="client_p95_ms",
+        title="Language Pair Latency Heatmap (p95)",
+        cmap="YlOrRd",
+        value_suffix=" ms",
+    )
+    _plot_pair_heatmap(
+        pair_rows,
+        chart_paths[5],
+        value_key="success_rate_pct",
+        title="Language Pair Reliability Heatmap",
+        cmap="RdYlGn",
+        value_suffix="%",
+    )
+    _plot_route_distribution(route_rows, chart_paths[6])
+    _plot_error_distribution(error_rows, chart_paths[7])
+    _plot_request_scatter(raw_rows, chart_paths[8])
+    _plot_stage_breakdown(raw_rows, chart_paths[9])
+    _plot_length_vs_latency_by_language(raw_rows, chart_paths[10])
+    _plot_overall_latency_by_language(raw_rows, chart_paths[11])
 
     index_md = plot_dir / "presentation_graphs.md"
     _write_index_md(index_md, chart_paths, summary)

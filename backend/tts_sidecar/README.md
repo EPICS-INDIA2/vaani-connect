@@ -1,19 +1,18 @@
 # Vaani Connect TTS Sidecar
 
-This sidecar isolates Indic Parler-TTS from the main backend so the core
-translation/ASR stack can keep its own dependency set.
+This service isolates Indic Parler TTS from the main backend so the core translation and ASR stack can keep a separate dependency set.
 
-## What it does
+## What It Does
 
-- Runs `ai4bharat/indic-parler-tts` in a separate FastAPI service
-- Exposes `POST /tts` that returns `audio/wav`
-- Can be called by the main backend when `VAANI_TTS_PROVIDER=parler_sidecar`
+- runs `ai4bharat/indic-parler-tts` in a separate FastAPI service
+- exposes `POST /tts` and returns `audio/wav`
+- can be used by the main backend when `VAANI_TTS_PROVIDER=parler_sidecar`
 
-## Recommended setup
+## Recommended Setup
 
 Use a separate virtual environment or container for this sidecar.
 
-### Linux/macOS/WSL
+### Linux, macOS, or WSL
 
 ```bash
 cd /workspace/vaani-connect/backend/tts_sidecar
@@ -25,7 +24,7 @@ export HF_TOKEN="your_huggingface_read_token"
 uvicorn app:app --host 0.0.0.0 --port 8010
 ```
 
-### Main backend env vars
+## Main Backend Environment
 
 Set these in the main backend environment:
 
@@ -40,24 +39,29 @@ Optional:
 export VAANI_TTS_SIDECAR_TIMEOUT_SECONDS=120
 ```
 
-### Sidecar env vars
+## Sidecar Environment Variables
 
 - `HF_TOKEN` or `HUGGINGFACE_HUB_TOKEN`
-- `PARLER_TTS_MODEL_ID` (default: `ai4bharat/indic-parler-tts`)
-- `PARLER_TTS_DEVICE` (`auto`, `cpu`, or `cuda`)
-- `PARLER_TTS_VOICE_DESCRIPTION` for a default speaking style prompt
+- `PARLER_TTS_MODEL_ID` with default `ai4bharat/indic-parler-tts`
+- `PARLER_TTS_DEVICE` with values such as `auto`, `cpu`, or `cuda`
+- `PARLER_TTS_VOICE_DESCRIPTION` for the default speaking style prompt
 
-## Health check
+## Health Check
 
 ```bash
 curl http://localhost:8010/health
 ```
 
-## TTS request example
+## Example Request
 
 ```bash
 curl -X POST http://localhost:8010/tts \
   -H "Content-Type: application/json" \
-  -d '{"text":"नमस्ते, आप कैसे हैं?","target_language":"Hindi"}' \
+  -d '{"text":"Namaste, aap kaise hain?","target_language":"Hindi"}' \
   --output sample.wav
 ```
+
+## Related Docs
+
+- [../../README.md](../../README.md)
+- [../benchmark/README.md](../benchmark/README.md)

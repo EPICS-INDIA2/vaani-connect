@@ -1,8 +1,12 @@
 # Local release workflow notes/scripts
 release.sh
+release.ps1
 RELEASE_SH_GUIDE.md
 
 # Local/private project notes and editor tasks
 PUBLISHABILITY_CHECKLIST.md
 TODO.txt
 .vscode/tasks.json
+
+# Local automation and changelog agent tooling
+tools/

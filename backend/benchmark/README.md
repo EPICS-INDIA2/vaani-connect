@@ -1,24 +1,28 @@
 # Benchmark Harness
 
-This harness benchmarks `POST /translate/text` and generates presentation-ready artifacts:
+This directory contains the benchmark tooling for Vaani Connect backend performance runs.
 
-- `raw_requests.csv` (request-level data)
-- `pair_summary.csv` (language-pair KPI summary)
-- `route_summary.csv` (model route distribution)
+## What It Produces
+
+The text benchmark workflow generates:
+
+- `raw_requests.csv`
+- `pair_summary.csv`
+- `route_summary.csv`
 - `error_summary.csv`
 - `summary.json`
-- `summary.md` (report-ready narrative + KPI tables)
+- `summary.md`
 
 ## Prerequisites
 
-- Backend is running at `http://localhost:8000`.
-- Backend exposes `POST /translate/text`.
-- Backend exposes `GET /metrics/recent`.
+- The backend is running at `http://localhost:8000`.
+- `POST /translate/text` is available.
+- `GET /metrics/recent` is available.
 - If API key mode is enabled, pass `--api-key`.
 
-## Run benchmark
+## Run Text Benchmark
 
-From `bakcend/`:
+From `backend/`:
 
 ```bash
 python benchmark/run_api_benchmark.py \
@@ -29,24 +33,40 @@ python benchmark/run_api_benchmark.py \
   --tag professional-demo
 ```
 
-If API key is enabled:
+For length-vs-latency and language-level latency charts, prefer the fuller
+dataset that covers every canonical translation language with short, medium,
+and long samples:
 
 ```bash
 python benchmark/run_api_benchmark.py \
-  --api-key your_key_here
+  --base-url http://localhost:8000 \
+  --dataset benchmark/datasets/language_length_text_cases.csv \
+  --runs-per-case 3 \
+  --concurrency 2 \
+  --tag language-length
 ```
 
-## Output location
+If API key mode is enabled:
 
-Results are stored at:
+```bash
+python benchmark/run_api_benchmark.py --api-key your_key_here
+```
+
+## Output Location
+
+Results are written to:
 
 `benchmark/results/<timestamp>-<tag>/`
 
-Open `summary.md` for presentation slides and use the CSV files for charts.
+Useful outputs include:
 
-## Generate presentation-ready graphs
+- `summary.md` for report-ready narrative
+- CSV files for spreadsheet or chart workflows
+- `summary.json` for machine-readable summary data
 
-Render graphs for one run by passing either the run folder name or full path:
+## Generate Presentation Graphs
+
+You can render charts by passing either a run folder name or a full path:
 
 ```bash
 python benchmark/render_presentation_graphs.py 20260310T021747Z-professional-demo
@@ -55,49 +75,43 @@ python benchmark/render_presentation_graphs.py 20260310T021747Z-professional-dem
 or
 
 ```bash
-python benchmark/render_presentation_graphs.py /mnt/c/vaaniconnect9/vaani-connect/bakcend/benchmark/results/20260310T021747Z-professional-demo
+python benchmark/render_presentation_graphs.py /mnt/c/vaaniconnect9/vaani-connect/backend/benchmark/results/20260310T021747Z-professional-demo
 ```
 
-This writes charts to:
+Charts are written to:
 
 `benchmark/results/<run-folder>/plots/`
 
-Main files:
+Common plot outputs:
 
 - `01_kpi_overview.png`
 - `02_latency_percentiles.png`
 - `03_pair_p95_latency.png`
 - `04_pair_success_rate.png`
-- `05_route_distribution.png`
-- `06_error_distribution.png`
-- `07_client_vs_server_scatter.png`
-- `08_stage_latency_breakdown.png`
-- `presentation_graphs.md` (image index for quick copy/paste into slides)
+- `05_pair_latency_heatmap.png`
+- `06_pair_success_heatmap.png`
+- `07_route_distribution.png`
+- `08_error_distribution.png`
+- `09_client_vs_server_scatter.png`
+- `10_stage_latency_breakdown.png`
+- `presentation_graphs.md`
 
-## Dataset format
+## Dataset Format
 
-CSV header:
+Text benchmark CSV header:
 
 `case_id,source_language,target_language,text,include_speech`
 
-- `case_id`: optional (auto-generated if omitted)
-- `include_speech`: optional, defaults to `false`
+- `case_id` is optional
+- `include_speech` is optional and defaults to `false`
+- `language_length_text_cases.csv` is the recommended dataset for charting
+  text length against latency across all supported source languages
+- the current version includes 5 length tiers per supported source language
+  for 115 total benchmark cases
 
-## Important note for larger runs
+## Speech Benchmark
 
-The backend keeps only recent metrics in memory (`VAANI_RECENT_METRICS_LIMIT`, default `100`).
-If your benchmark sends more successful requests than that limit, some internal metrics may not join to request rows.
-Increase the env var before running large benchmark rounds.
-
-If `matplotlib` is missing in your environment:
-
-```bash
-pip install matplotlib
-```
-
-## Speech benchmark
-
-Use `benchmark/run_speech_benchmark.py` to benchmark `POST /translate/speech` with local audio fixtures instead of timing requests manually in the app.
+Use `benchmark/run_speech_benchmark.py` to measure `POST /translate/speech` with local audio fixtures.
 
 Example:
 
@@ -115,6 +129,20 @@ Speech dataset header:
 `case_id,source_language,target_language,audio_path,include_speech`
 
 Notes:
-- `audio_path` is required.
-- Relative `audio_path` values resolve from the dataset file location.
-- The script emits request-level CSV, summary JSON/Markdown, translation route summary, and ASR route summary.
+
+- `audio_path` is required
+- relative `audio_path` values resolve from the dataset file location
+- the script emits request-level CSV, summary JSON and Markdown, translation route summary, and ASR route summary
+
+## Important Note for Larger Runs
+
+The backend keeps only recent metrics in memory through `VAANI_RECENT_METRICS_LIMIT` with a default of `100`.
+If your benchmark exceeds that limit, some internal metrics may not join back to request rows.
+
+Increase the env var before large runs if you need complete joins.
+
+If `matplotlib` is missing:
+
+```bash
+pip install matplotlib
+```
