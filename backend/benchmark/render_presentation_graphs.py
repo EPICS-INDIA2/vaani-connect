@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import statistics
 from pathlib import Path
 from typing import Any
@@ -367,19 +368,46 @@ def _aggregate_language_latency(raw_rows: list[dict[str, str]]) -> list[tuple[st
     return summarized
 
 
+def _featured_languages(raw_rows: list[dict[str, str]], limit: int = 8) -> list[str]:
+    preferred = ["English", "Hindi", "Tamil", "Telugu", "Bengali", "Marathi", "Urdu", "Kannada"]
+    available = {row.get("source_language", "").strip() for row in raw_rows if row.get("source_language")}
+    featured = [language for language in preferred if language in available]
+    if len(featured) >= limit:
+        return featured[:limit]
+
+    for language in sorted(available):
+        if language not in featured:
+            featured.append(language)
+        if len(featured) >= limit:
+            break
+    return featured
+
+
+def _categorical_colors(count: int) -> list[Any]:
+    if count <= 0:
+        return []
+    if count <= 20:
+        cmap = plt.get_cmap("tab20")
+        return [cmap(index) for index in range(count)]
+
+    cmap = plt.get_cmap("gist_ncar")
+    return [cmap(index / count) for index in range(count)]
+
+
 def _plot_length_vs_latency_by_language(raw_rows: list[dict[str, str]], out_path: Path) -> None:
     grouped = _aggregate_latency_by_language_and_length(raw_rows)
+    languages = sorted(grouped)
 
-    fig, ax = plt.subplots(figsize=(11, 6))
-    if not grouped:
+    fig, ax = plt.subplots(figsize=(15, 9))
+    if not languages:
         ax.text(0.5, 0.5, "No request-level length/latency data found", ha="center", va="center", fontsize=13)
         ax.axis("off")
         _save_fig(fig, out_path)
         return
 
-    cmap = plt.get_cmap("tab10")
+    colors = _categorical_colors(len(languages))
     plotted = 0
-    for index, language in enumerate(sorted(grouped)):
+    for index, language in enumerate(languages):
         per_length = grouped[language]
         lengths = sorted(per_length)
         mean_latencies = [statistics.mean(per_length[length]) for length in lengths]
@@ -387,10 +415,11 @@ def _plot_length_vs_latency_by_language(raw_rows: list[dict[str, str]], out_path
             lengths,
             mean_latencies,
             marker="o",
-            linewidth=2,
-            markersize=5,
-            color=cmap(index % 10),
+            linewidth=1.6,
+            markersize=3.5,
+            color=colors[index],
             label=language,
+            alpha=0.8,
         )
         plotted += 1
 
@@ -401,7 +430,93 @@ def _plot_length_vs_latency_by_language(raw_rows: list[dict[str, str]], out_path
         ax.set_xlabel("Input text length (characters)")
         ax.set_ylabel("Average client latency (ms)")
         ax.set_title("Text Length vs Latency by Source Language")
-        ax.legend(title="Language", ncol=2 if plotted > 6 else 1)
+        ax.grid(True, alpha=0.25)
+        ax.legend(
+            title="Language",
+            ncol=2 if plotted <= 16 else 3,
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            fontsize=9,
+            title_fontsize=10,
+        )
+        fig.subplots_adjust(right=0.76)
+    _save_fig(fig, out_path)
+
+
+def _plot_length_vs_latency_featured_languages(raw_rows: list[dict[str, str]], out_path: Path) -> None:
+    grouped = _aggregate_latency_by_language_and_length(raw_rows)
+    languages = [language for language in _featured_languages(raw_rows) if language in grouped]
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    if not languages:
+        ax.text(0.5, 0.5, "No featured language data found", ha="center", va="center", fontsize=13)
+        ax.axis("off")
+        _save_fig(fig, out_path)
+        return
+
+    cmap = plt.get_cmap("tab10")
+    for index, language in enumerate(languages):
+        per_length = grouped[language]
+        lengths = sorted(per_length)
+        mean_latencies = [statistics.mean(per_length[length]) for length in lengths]
+        ax.plot(
+            lengths,
+            mean_latencies,
+            marker="o",
+            linewidth=2.4,
+            markersize=5,
+            color=cmap(index % 10),
+            label=language,
+        )
+
+    ax.set_xlabel("Input text length (characters)")
+    ax.set_ylabel("Average client latency (ms)")
+    ax.set_title("Text Length vs Latency (Featured Languages)")
+    ax.legend(title="Language", ncol=2)
+    _save_fig(fig, out_path)
+
+
+def _plot_length_vs_latency_small_multiples(raw_rows: list[dict[str, str]], out_path: Path) -> None:
+    grouped = _aggregate_latency_by_language_and_length(raw_rows)
+    languages = sorted(grouped)
+
+    if not languages:
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, "No request-level length/latency data found", ha="center", va="center", fontsize=13)
+        ax.axis("off")
+        _save_fig(fig, out_path)
+        return
+
+    cols = 3
+    rows = math.ceil(len(languages) / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(14, max(6, rows * 3.3)), sharex=True, sharey=True)
+    axes_flat = axes.flat if hasattr(axes, "flat") else [axes]
+    axes_list = list(axes_flat)
+    cmap = plt.get_cmap("tab20")
+
+    for index, language in enumerate(languages):
+        ax = axes_list[index]
+        per_length = grouped[language]
+        lengths = sorted(per_length)
+        mean_latencies = [statistics.mean(per_length[length]) for length in lengths]
+        ax.plot(
+            lengths,
+            mean_latencies,
+            marker="o",
+            linewidth=1.8,
+            markersize=4,
+            color=cmap(index % 20),
+        )
+        ax.set_title(language, fontsize=10)
+        ax.grid(True, alpha=0.25)
+
+    for index in range(len(languages), len(axes_list)):
+        axes_list[index].axis("off")
+
+    fig.suptitle("Text Length vs Latency by Source Language (Small Multiples)", fontsize=16, fontweight="bold")
+    fig.supxlabel("Input text length (characters)")
+    fig.supylabel("Average client latency (ms)")
     _save_fig(fig, out_path)
 
 
@@ -494,6 +609,8 @@ def main() -> int:
         plot_dir / "10_stage_latency_breakdown.png",
         plot_dir / "11_length_vs_latency_by_language.png",
         plot_dir / "12_overall_latency_by_language.png",
+        plot_dir / "13_length_vs_latency_featured_languages.png",
+        plot_dir / "14_length_vs_latency_small_multiples.png",
     ]
 
     _plot_kpi_overview(summary, chart_paths[0])
@@ -522,6 +639,8 @@ def main() -> int:
     _plot_stage_breakdown(raw_rows, chart_paths[9])
     _plot_length_vs_latency_by_language(raw_rows, chart_paths[10])
     _plot_overall_latency_by_language(raw_rows, chart_paths[11])
+    _plot_length_vs_latency_featured_languages(raw_rows, chart_paths[12])
+    _plot_length_vs_latency_small_multiples(raw_rows, chart_paths[13])
 
     index_md = plot_dir / "presentation_graphs.md"
     _write_index_md(index_md, chart_paths, summary)

@@ -153,7 +153,7 @@ python benchmark/run_api_benchmark.py \
   --tag language-length
 ```
 
-That dataset now includes 5 length tiers for each supported source language.
+That dataset now includes 10 text-length samples for each supported source language.
 
 ## Optional TTS Sidecar
 

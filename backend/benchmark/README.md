@@ -106,8 +106,8 @@ Text benchmark CSV header:
 - `include_speech` is optional and defaults to `false`
 - `language_length_text_cases.csv` is the recommended dataset for charting
   text length against latency across all supported source languages
-- the current version includes 5 length tiers per supported source language
-  for 115 total benchmark cases
+- the current version includes 10 text-length samples per supported source
+  language for 230 total benchmark cases
 
 ## Speech Benchmark
 
