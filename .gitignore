@@ -10,3 +10,4 @@ TODO.txt
 
 # Local automation and changelog agent tooling
 tools/
+*.docx
