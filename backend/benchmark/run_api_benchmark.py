@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Presentation-ready API benchmark harness for Vaani Connect backend."""
+"""Presentation-ready API benchmark harness for Vaani Connect backend.
+
+This is not runtime app code. It sends many text translation requests to a
+running backend and writes result files that can be graphed for reports.
+"""
 
 from __future__ import annotations
 

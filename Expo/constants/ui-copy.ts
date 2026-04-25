@@ -1,3 +1,9 @@
+// User-facing copy for the main screen.
+//
+// Keeping these strings in one file makes it safer for future students to edit
+// button labels, error messages, and status text without searching through the
+// large screen component.
+
 type UiCopy = {
   statusReady: string;
   statusListening: string;
@@ -1018,6 +1024,8 @@ const UI_COPY: Record<string, Partial<UiCopy>> = {
   },
 };
 
+// Short accessibility/subtitle labels for controls that only show icons or
+// compact text in the main screen.
 export const UI_SUBTITLES = {
   from: 'Source language',
   to: 'Target language',

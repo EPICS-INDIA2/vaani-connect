@@ -1,3 +1,10 @@
+"""Speech-to-text service for uploaded audio.
+
+The API saves a user's recording to a temporary file, then this service turns
+that audio into source-language text before translation runs. It supports a
+legacy Whisper/IndicWav2Vec path and an optional IndicConformer provider.
+"""
+
 from __future__ import annotations  # Keep type hints as strings until runtime (avoids some import/type issues).
 
 import logging
@@ -15,6 +22,8 @@ from transformers import AutoModel, AutoModelForCTC, AutoModelForSpeechSeq2Seq, 
 logger = logging.getLogger(__name__)
 
 # Map language names used by your app to Whisper language codes.
+# Languages missing from this map can still use Whisper auto-detection, but a
+# mapped language gives Whisper a stronger hint.
 WHISPER_LANG_MAP = {
     "English": "en",  # English -> "en"
     "Assamese": "as",  # Assamese -> "as"
@@ -35,6 +44,8 @@ WHISPER_LANG_MAP = {
 }
 
 # For some Indian languages, use language-specific IndicWav2Vec models.
+# These Hugging Face IDs are loaded lazily. Add a language only after checking
+# the model accepts the audio format and returns text reliably.
 INDIC_ASR_MODEL_IDS = {
     "Hindi": "ai4bharat/indicwav2vec-hindi",  # Hugging Face repo id for Hindi ASR.
     "Telugu": "ai4bharat/indicwav2vec_v1_telugu",  # Hugging Face repo id for Telugu ASR.
@@ -129,6 +140,8 @@ class ASRService:
         self._indic_conformer_lock = Lock()
 
     def _get_indic_conformer_model(self):
+        # IndicConformer is optional and relatively heavy, so it is loaded on
+        # first use and any load failure is cached to avoid repeated downloads.
         if self._indic_conformer_model_load_error is not None:
             raise self._indic_conformer_model_load_error
         if self.indic_conformer_model is not None:
@@ -385,6 +398,8 @@ class ASRService:
 
     # Public method used by the rest of app: choose model path and return text transcription.
     def transcribe_with_stats(self, audio_path: str, src_lang_name: str) -> tuple[str, dict[str, Any]]:
+        # This is the main ASR entrypoint used by server.py. It returns both the
+        # transcript and route stats so API metrics can show which model path ran.
         started = time.perf_counter()
         prepared_audio = self._prepare_audio_input(audio_path, target_sr=16000)
 

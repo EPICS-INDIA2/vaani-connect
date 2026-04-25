@@ -1,3 +1,10 @@
+"""Romanized-input normalization for Indic language text.
+
+Users sometimes type Hindi/Tamil/etc. with Latin letters. This helper detects
+that case and, when supported, converts the text to the native script before it
+goes into the translation model.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -96,6 +103,8 @@ def _contains_native_script(text: str, script_code: str) -> bool:
 
 
 def is_probably_romanized(text: str, source_language: str) -> bool:
+    # Heuristic only: if most meaningful characters are Latin letters and the
+    # native script is absent, treat the input as romanized.
     stripped = text.strip()
     if not stripped:
         return False
@@ -155,6 +164,8 @@ def transliterate_to_native(text: str, source_language: str) -> str:
 
 
 def normalize_text_for_translation(text: str, source_language: str) -> NormalizedText:
+    # The server uses this one function before translation so it can also report
+    # whether transliteration was attempted in the API response/metrics.
     stripped = text.strip()
     script_code = _language_script_code(source_language) or "unknown"
     supported = transliteration_supported(source_language)

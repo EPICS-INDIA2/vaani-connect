@@ -1,3 +1,10 @@
+"""FastAPI routes and request handling for the Vaani Connect backend.
+
+This is the main backend entrypoint. The Expo app calls these endpoints for
+language lists, text translation, speech translation, backend readiness, and
+generated audio playback.
+"""
+
 from __future__ import annotations  # Postpone evaluation of type hints until runtime.
 
 import hashlib
@@ -101,6 +108,9 @@ def _build_language_name_lookup() -> dict[str, str]:
 
 LANGUAGE_NAME_LOOKUP = _build_language_name_lookup()
 
+
+# Runtime settings read from environment variables. These values control the
+# public API boundary, so keep names and defaults in sync with deployment docs.
 
 # Optional API key. If unset, API key auth is disabled.
 API_KEY = os.getenv("VAANI_API_KEY")
@@ -295,6 +305,8 @@ def _sign_audio_url(filename: str, expires: int) -> str:
 
 
 def _build_audio_url(filename: str) -> str:
+    # Audio URLs can be plain local paths in development or signed paths in
+    # deployments that set VAANI_AUDIO_URL_SECRET.
     base_path = f"/audio/{filename}"
     if not AUDIO_URL_SECRET:
         return base_path
@@ -370,6 +382,8 @@ def _validate_audio_upload(audio: UploadFile) -> str:
 
 
 def _run_tts_best_effort(text: str, target_language: str, enabled: bool) -> tuple[str | None, dict[str, Any]]:
+    # TTS is intentionally best-effort: users should still receive translated
+    # text even if voice generation fails or times out.
     tts_stats: dict[str, Any] = {
         "enabled": enabled,
         "requested_language": target_language,
@@ -500,6 +514,8 @@ def translate_text(
     request: Request,
     _: None = Depends(_require_api_key),  # Enforce API key dependency when configured.
 ):
+    # Flow: validate text/languages -> optionally normalize romanized input ->
+    # translate -> optionally generate speech -> return JSON to the app.
     request_started = time.perf_counter()
     request_id = uuid.uuid4().hex[:12]
     _enforce_rate_limit(request)  # Block abusive traffic bursts.
@@ -585,6 +601,8 @@ def translate_speech(
     include_speech: bool = Form(True),  # Allow clients to skip blocking TTS for faster text-first responses.
     _: None = Depends(_require_api_key),  # Enforce API key dependency when configured.
 ):
+    # Flow: save uploaded recording to a temp file -> transcribe speech -> run
+    # translation -> optionally generate translated speech -> cleanup temp file.
     request_started = time.perf_counter()
     request_id = uuid.uuid4().hex[:12]
     _enforce_rate_limit(request)  # Apply request rate limiting.

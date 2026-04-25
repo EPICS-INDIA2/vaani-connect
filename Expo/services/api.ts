@@ -1,10 +1,20 @@
+// Frontend API client for Vaani Connect.
+//
+// Screens and hooks call these helpers instead of using fetch directly. Keep
+// endpoint paths, request field names, and response types matched to
+// backend/app/server.py.
+
 import { Platform } from 'react-native';
 
 import type { SupportedLanguage } from '@/constants/languages';
 
 const envBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
 const envApiKey = process.env.EXPO_PUBLIC_API_KEY;
+const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const PROBE_TIMEOUT_MS = 8000;
 
+// Android emulators cannot use localhost to reach the computer running the
+// backend, so they use 10.0.2.2. iOS simulator and web can use localhost.
 const defaultBaseUrl = Platform.select({
   android: 'http://10.0.2.2:8000',
   ios: 'http://localhost:8000',
@@ -44,6 +54,8 @@ export type BackendStatusSnapshot = {
   checkedAt: string;
 };
 
+type JsonOperation = 'languages' | 'text' | 'speech';
+
 export class ApiError extends Error {
   code: ApiErrorCode;
   status?: number;
@@ -57,6 +69,7 @@ export class ApiError extends Error {
 }
 
 function withApiKey(headers: Record<string, string> = {}): Record<string, string> {
+  // The backend only requires this header when VAANI_API_KEY is set.
   if (!envApiKey) {
     return headers;
   }
@@ -82,7 +95,17 @@ function isNetworkFailure(error: unknown): boolean {
   return error instanceof TypeError;
 }
 
-async function fetchWithTimeout(input: string, init: RequestInit, timeoutMs = 8000): Promise<Response> {
+function isNativeAudioUpload(audioFile: AudioUploadSource): audioFile is NativeAudioUpload {
+  return typeof audioFile === 'object' && audioFile !== null && 'uri' in audioFile;
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  // React Native fetch has no built-in timeout, so AbortController prevents the
+  // app from waiting forever when the backend is offline or warming up.
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -98,10 +121,12 @@ function isUnauthorizedStatus(status: number): boolean {
 }
 
 async function probePath(path: '/health' | '/ready'): Promise<Response | null> {
+  // /ready means models are loaded; /health only means the server process is
+  // alive. The UI uses both to show "ready" versus "warming up".
   try {
     return await fetchWithTimeout(`${API_BASE_URL}${path}`, {
       headers: withApiKey(),
-    });
+    }, PROBE_TIMEOUT_MS);
   } catch (error) {
     if (isAbortError(error) || isNetworkFailure(error)) {
       return null;
@@ -142,13 +167,12 @@ export async function probeBackendStatus(): Promise<BackendStatusSnapshot> {
 async function requestJson<T>(
   input: string,
   init: RequestInit,
-  operation: 'languages' | 'text' | 'speech',
+  operation: JsonOperation,
 ): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-
+  // Shared JSON request wrapper. It converts low-level fetch failures into
+  // ApiError codes that the screen can turn into beginner-friendly messages.
   try {
-    const res = await fetch(input, { ...init, signal: controller.signal });
+    const res = await fetchWithTimeout(input, init, DEFAULT_REQUEST_TIMEOUT_MS);
 
     if (!res.ok) {
       throw new ApiError(
@@ -173,12 +197,12 @@ async function requestJson<T>(
     }
 
     throw new ApiError(mapErrorCode(operation), `${operation} request failed`);
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
 function inferAudioMimeType(uri: string): string {
+  // Native recordings provide file URIs, so we infer the upload content type
+  // from the extension before sending FormData to the backend.
   const normalized = uri.toLowerCase();
 
   if (normalized.endsWith('.m4a')) return 'audio/mp4';
@@ -220,6 +244,8 @@ export async function translateText(params: {
   targetLanguage: SupportedLanguage;
   includeSpeech?: boolean;
 }): Promise<TranslationResponse> {
+  // Text translation endpoint. includeSpeech=false keeps normal translations
+  // fast; the app can request speech later when the user taps Listen.
   return requestJson<TranslationResponse>(`${API_BASE_URL}/translate/text`, {
     method: 'POST',
     headers: withApiKey({ 'Content-Type': 'application/json' }),
@@ -238,8 +264,10 @@ export async function translateSpeech(params: {
   targetLanguage: SupportedLanguage;
   includeSpeech?: boolean;
 }): Promise<TranslationResponse> {
+  // Speech translation uses multipart FormData because the backend receives an
+  // audio file plus source/target language fields in one request.
   const data = new FormData();
-  if (typeof params.audioFile === 'object' && params.audioFile !== null && 'uri' in params.audioFile) {
+  if (isNativeAudioUpload(params.audioFile)) {
     data.append('audio', params.audioFile as unknown as Blob);
   } else {
     data.append('audio', params.audioFile, 'recording.webm');

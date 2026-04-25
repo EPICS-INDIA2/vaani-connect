@@ -1,3 +1,9 @@
+// Language names used by the Expo app.
+//
+// These strings are sent to the backend, which maps them to model-specific
+// language codes in backend/app/languages.py. Keep both files synchronized when
+// adding, removing, or renaming a language.
+
 export const SUPPORTED_LANGUAGES = [
   'English',
   'Assamese',
@@ -24,9 +30,12 @@ export const SUPPORTED_LANGUAGES = [
   'Urdu',
 ] as const;
 
-export type SupportedLanguage = string;
+export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
+const SUPPORTED_LANGUAGE_SET = new Set<string>(SUPPORTED_LANGUAGES);
 
-export const LANGUAGE_LABELS: Record<string, string> = {
+// Labels shown in the picker. The object keys must stay exactly equal to the
+// SupportedLanguage names above because getLanguageLabel indexes this map.
+export const LANGUAGE_LABELS: Record<SupportedLanguage, string> = {
   English: 'अंग्रेज़ी',
   Assamese: 'অসমীয়া',
   Bodo: 'बड़ो',
@@ -52,6 +61,10 @@ export const LANGUAGE_LABELS: Record<string, string> = {
   Urdu: 'اردو',
 };
 
-export function getLanguageLabel(language: string): string {
-  return LANGUAGE_LABELS[language] ?? language;
+export function isSupportedLanguage(language: string): language is SupportedLanguage {
+  return SUPPORTED_LANGUAGE_SET.has(language);
+}
+
+export function getLanguageLabel(language: SupportedLanguage | string): string {
+  return isSupportedLanguage(language) ? LANGUAGE_LABELS[language] : language;
 }

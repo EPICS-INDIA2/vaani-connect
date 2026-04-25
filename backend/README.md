@@ -52,6 +52,11 @@ pip install -r requirements.txt
 python -m app.setup
 ```
 
+Notes:
+
+- Use Python 3.11 for this backend. Python 3.13 can fail to resolve some pinned ML wheels.
+- `torchvision` is intentionally not required by this project backend.
+
 ### 3. Set the Hugging Face token
 
 Create a read token at <https://huggingface.co/settings/tokens> and export one of:

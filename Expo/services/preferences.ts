@@ -1,6 +1,12 @@
+// Local preference storage for Vaani Connect.
+//
+// This file keeps the latest language pair, app mode, microphone onboarding
+// state, and recent translations on the device. The app still works if storage
+// fails; it just falls back to defaults.
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { SupportedLanguage } from '@/constants/languages';
+import { isSupportedLanguage, type SupportedLanguage } from '@/constants/languages';
 
 const STORAGE_KEY = 'vaani-connect.preferences';
 const MAX_HISTORY_ITEMS = 10;
@@ -32,6 +38,8 @@ export async function loadStoredPreferences(): Promise<StoredPreferences | null>
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
 
+    // Treat stored JSON as untrusted. Old app versions or manual edits can
+    // leave invalid data, so every field is checked before it is used.
     const parsed: unknown = JSON.parse(raw);
     if (
       typeof parsed === 'object' &&
@@ -50,6 +58,8 @@ export async function loadStoredPreferences(): Promise<StoredPreferences | null>
       };
 
       if (
+        isSupportedLanguage(candidate.sourceLanguage) &&
+        isSupportedLanguage(candidate.targetLanguage) &&
         typeof candidate.microphoneOnboardingDismissed === 'boolean' &&
         Array.isArray(candidate.recentHistory) &&
         (candidate.lastMode === undefined || candidate.lastMode === 'translate' || candidate.lastMode === 'conversation')
@@ -63,13 +73,15 @@ export async function loadStoredPreferences(): Promise<StoredPreferences | null>
         };
       }
 
-      return {
-        sourceLanguage: candidate.sourceLanguage,
-        targetLanguage: candidate.targetLanguage,
-        lastMode: 'translate',
-        microphoneOnboardingDismissed: false,
-        recentHistory: [],
-      };
+      if (isSupportedLanguage(candidate.sourceLanguage) && isSupportedLanguage(candidate.targetLanguage)) {
+        return {
+          sourceLanguage: candidate.sourceLanguage,
+          targetLanguage: candidate.targetLanguage,
+          lastMode: 'translate',
+          microphoneOnboardingDismissed: false,
+          recentHistory: [],
+        };
+      }
     }
   } catch {
     return null;
@@ -93,6 +105,8 @@ export async function saveStoredPreferences(preferences: StoredPreferences): Pro
 }
 
 function isStoredHistoryEntry(value: unknown): value is StoredHistoryEntry {
+  // Recent history is displayed directly in the UI, so validate entries before
+  // restoring them from AsyncStorage.
   const candidate = value as {
     id?: unknown;
     createdAt?: unknown;
@@ -117,7 +131,9 @@ function isStoredHistoryEntry(value: unknown): value is StoredHistoryEntry {
     typeof candidate.id === 'string' &&
     typeof candidate.createdAt === 'string' &&
     typeof candidate.sourceLanguage === 'string' &&
+    isSupportedLanguage(candidate.sourceLanguage) &&
     typeof candidate.targetLanguage === 'string' &&
+    isSupportedLanguage(candidate.targetLanguage) &&
     typeof candidate.sourceText === 'string' &&
     typeof candidate.translatedText === 'string' &&
     (candidate.transcribedText === undefined || typeof candidate.transcribedText === 'string') &&

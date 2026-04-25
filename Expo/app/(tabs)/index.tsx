@@ -1,3 +1,9 @@
+// Main Vaani Connect screen.
+//
+// This component owns the user workflow: choose languages, type or record
+// speech, call the backend, show translation results, save recent history, and
+// play generated audio.
+
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Clipboard from 'expo-clipboard';
 import {
@@ -62,6 +68,8 @@ const SUCCESS = '#8fd19e';
 const DANGER = '#ff8d7a';
 const INFO = '#7bc4ff';
 const RESULT_CARD_SCROLL_Y = 0;
+
+// Defaults used before stored preferences or backend-supported languages load.
 const DEFAULT_SOURCE_LANGUAGE: SupportedLanguage = 'English';
 const DEFAULT_TARGET_LANGUAGE: SupportedLanguage = 'Hindi';
 
@@ -136,6 +144,8 @@ function buildHistoryEntry(params: {
   transcribedText?: string;
   origin: TranslationOrigin;
 }): StoredHistoryEntry {
+  // History entries are local-only and give each saved translation a stable id
+  // for FlatList rendering and later restore.
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     createdAt: new Date().toISOString(),
@@ -152,6 +162,8 @@ function resolveInitialPair(
   languages: SupportedLanguage[],
   stored?: Partial<Record<'sourceLanguage' | 'targetLanguage', SupportedLanguage>> | null,
 ) {
+  // Choose a safe language pair from stored preferences when possible. If the
+  // backend no longer supports a stored language, fall back to a valid pair.
   const preferredSource = stored?.sourceLanguage;
   const preferredTarget = stored?.targetLanguage;
   const fallbackSource = languages.includes(DEFAULT_SOURCE_LANGUAGE)
@@ -183,6 +195,8 @@ function buildPresetLabel(sourceLanguage: SupportedLanguage, targetLanguage: Sup
 }
 
 function collectPresetPairs(history: StoredHistoryEntry[]): LanguagePreset[] {
+  // Presets start with useful built-in pairs, then add recent pairs from the
+  // user's history so common routes are easy to reuse.
   const builtInPairs: LanguagePreset[] = [
     { sourceLanguage: 'English', targetLanguage: 'Hindi', label: buildPresetLabel('English', 'Hindi'), isRecent: false },
     { sourceLanguage: 'Hindi', targetLanguage: 'English', label: buildPresetLabel('Hindi', 'English'), isRecent: false },
@@ -236,6 +250,8 @@ function buildConversationTurn(params: {
 }
 
 export default function HomeScreen() {
+  // Screen state is grouped by workflow: selected languages, text/audio result,
+  // feedback banners, stored history, and conversation-mode turns.
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [availableLanguages, setAvailableLanguages] = useState<SupportedLanguage[]>([...SUPPORTED_LANGUAGES]);
@@ -272,6 +288,8 @@ export default function HomeScreen() {
     useBackendStatus();
 
   useEffect(() => {
+    // Small entrance animation for the main surface. It is visual only and does
+    // not affect translation logic.
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -290,6 +308,8 @@ export default function HomeScreen() {
     let isMounted = true;
 
     async function loadLanguages() {
+      // Load local preferences first so the app feels familiar immediately,
+      // then ask the backend for the authoritative language list.
       const storedPreferences = await loadStoredPreferences();
       if (isMounted && storedPreferences) {
         setHistory(storedPreferences.recentHistory);
@@ -340,6 +360,8 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    // Default playback mode: the app should play audio through the speaker but
+    // not keep recording unless the user explicitly starts recording.
     void setAudioModeAsync({
       allowsRecording: false,
       playsInSilentMode: true,
@@ -350,6 +372,8 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    // Persist lightweight local state whenever the user changes languages,
+    // mode, onboarding state, or recent translation history.
     void saveStoredPreferences({
       sourceLanguage,
       targetLanguage,
@@ -367,6 +391,8 @@ export default function HomeScreen() {
   }, [flashMessage]);
 
   useEffect(() => {
+    // Derive one simple UI status from several async pieces of state. This
+    // keeps labels and button states consistent across recording/translation.
     if (playerStatus.playing || playerStatus.isBuffering) {
       setUiStatus('playing_audio');
       return;
@@ -607,6 +633,8 @@ export default function HomeScreen() {
   }
 
   async function translateFromText() {
+    // Text flow: validate draft text -> call /translate/text -> update result,
+    // history, and conversation state.
     if (!inputText.trim()) return;
 
     clearFeedback();
@@ -645,6 +673,8 @@ export default function HomeScreen() {
   }
 
   async function toggleRecording() {
+    // Recording flow: first tap starts microphone capture; second tap stops,
+    // uploads the saved audio file, and translates the transcript.
     clearFeedback();
 
     if (!isRecording) {
@@ -727,6 +757,8 @@ export default function HomeScreen() {
   }
 
   async function playOutputAudio() {
+    // The first translation request skips speech for speed. When the user taps
+    // Listen, reuse an existing audio URL or ask the backend to generate one.
     clearFeedback();
 
     if (!outputText.trim()) {
@@ -789,6 +821,8 @@ export default function HomeScreen() {
   }
 
   async function playAudio(audioUrl: string) {
+    // Expo's audio player needs a URL it can fetch. Relative backend audio paths
+    // are converted to absolute URLs before this function is called.
     try {
       await setAudioModeAsync({
         allowsRecording: false,
@@ -807,6 +841,8 @@ export default function HomeScreen() {
   }
 
   function switchLanguages() {
+    // Swap source/target languages and use the last output as the next input
+    // when available, similar to common translation apps.
     clearFeedback();
     const nextInput = outputText.trim() ? outputText : inputText;
     setInputText(nextInput);

@@ -1,3 +1,9 @@
+"""Tests that every supported translation language has a TTS route.
+
+Some languages intentionally use a nearby fallback voice, and these tests make
+sure those fallback choices stay explicit.
+"""
+
 import unittest
 from unittest.mock import patch
 

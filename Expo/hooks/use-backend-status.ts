@@ -1,3 +1,8 @@
+// Hook that keeps the UI informed about backend availability.
+//
+// The main screen uses this to show whether the server is ready, warming up,
+// offline, unauthorized, or returning an unexpected error.
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
@@ -21,6 +26,8 @@ export function useBackendStatus() {
   const refreshInFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
+    // Avoid overlapping checks if the user taps refresh while an automatic
+    // app-focus check is already running.
     if (refreshInFlightRef.current) {
       return;
     }
@@ -55,6 +62,8 @@ export function useBackendStatus() {
     mountedRef.current = true;
     void refresh();
 
+    // Re-check when the app returns to the foreground because the backend may
+    // have started, stopped, or finished warming up while the app was inactive.
     const subscription = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (nextState === 'active') {
         void refresh();

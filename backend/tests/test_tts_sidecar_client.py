@@ -1,3 +1,5 @@
+"""Tests for the optional local TTS sidecar client."""
+
 import unittest
 from email.message import Message
 from pathlib import Path

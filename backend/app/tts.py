@@ -1,3 +1,10 @@
+"""Text-to-speech helpers for translated output.
+
+The API calls this file only after translation succeeds. It can generate audio
+with gTTS or forward the request to a local sidecar service for higher-quality
+Indic voices.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +18,8 @@ from gtts import gTTS
 from app.languages import LANGUAGE_TO_CODE
 
 DEFAULT_TTS_PROVIDER = "gtts"
+# Keep this provider list in sync with deployment docs. Unknown environment
+# values intentionally fall back to gTTS instead of crashing translation.
 SUPPORTED_TTS_PROVIDERS = {DEFAULT_TTS_PROVIDER, "parler_sidecar"}
 DEFAULT_TTS_SIDECAR_URL = "http://127.0.0.1:8010"
 DEFAULT_TTS_SIDECAR_TIMEOUT_SECONDS = 120.0
@@ -85,6 +94,8 @@ GTTS_LANGUAGE_CODES = {
 
 
 def resolve_tts_route(tgt_lang_name: str) -> TTSRoute:
+    # Translation supports more languages than gTTS has voices for. This helper
+    # makes the fallback voice explicit so the API can report what happened.
     if tgt_lang_name not in LANGUAGE_TO_CODE:
         raise ValueError(f"Unsupported language for TTS: {tgt_lang_name}")
 
@@ -126,6 +137,8 @@ def _sidecar_timeout_seconds() -> float:
 
 
 def _temp_audio_file(suffix: str):
+    # Audio is written to a real temp file because both gTTS and the API audio
+    # endpoint work with paths on disk.
     temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     return temp_audio, temp_audio.name
 
@@ -180,6 +193,8 @@ def _gtts_generate(text: str, tgt_lang_name: str) -> TTSGeneration:
 
 
 def _sidecar_generate(text: str, tgt_lang_name: str) -> TTSGeneration:
+    # The sidecar is a separate local HTTP service. It keeps heavier voice
+    # generation isolated from the main FastAPI process.
     payload = json.dumps(
         {
             "text": text,
@@ -224,6 +239,8 @@ def _sidecar_generate(text: str, tgt_lang_name: str) -> TTSGeneration:
 
 
 def tts_generate_with_metadata(text: str, tgt_lang_name: str) -> TTSGeneration | None:
+    # Empty text means there is nothing useful to speak, so callers get None
+    # instead of an empty audio file.
     if not text or not text.strip():
         return None
 

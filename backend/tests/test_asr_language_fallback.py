@@ -1,3 +1,9 @@
+"""Tests for ASR model routing and fallback behavior.
+
+These tests use dummy processors/models so they can verify the decision logic
+without downloading large speech-recognition models.
+"""
+
 import unittest
 from unittest.mock import patch
 

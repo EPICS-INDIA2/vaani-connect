@@ -1,3 +1,9 @@
+"""Tests that model services are initialized for inference, not training.
+
+The important behavior is that loaded models are moved to the chosen device and
+put in eval mode before the app serves requests.
+"""
+
 import unittest
 from threading import Lock
 from unittest.mock import patch

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# Shared language registry for the backend.
+#
+# The frontend sends human-readable names such as "Hindi"; the backend converts
+# them to the model-specific IndicTrans codes below before calling translation.
+# If a language is added here, check the frontend language list and TTS/ASR
+# fallback maps too.
+
 # Canonical language names mapped to IndicTrans language codes.
 LANGUAGE_TO_CODE = {
     "English": "eng_Latn",
@@ -28,6 +35,8 @@ LANGUAGE_TO_CODE = {
 }
 
 # Dialect and alternate names that are normalized to canonical names above.
+# These aliases let users or API clients pass familiar names while the model
+# still receives one supported canonical language.
 LANGUAGE_ALIASES = {
     # Hindi cluster dialects.
     "Awadhi": "Hindi",

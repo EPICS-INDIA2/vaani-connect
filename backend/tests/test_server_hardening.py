@@ -1,3 +1,9 @@
+"""Tests for backend API safety and failure handling.
+
+These protect behavior around auth, rate limiting, file paths, upload limits,
+temporary audio cleanup, and TTS failures.
+"""
+
 import os
 import tempfile
 import unittest

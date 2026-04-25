@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Render presentation-ready graphs for one benchmark results folder."""
+"""Render presentation-ready graphs for one benchmark results folder.
+
+Use this after running a benchmark script. It reads saved CSV/JSON results and
+creates images for slides or reports.
+"""
 
 from __future__ import annotations
 

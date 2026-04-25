@@ -1,3 +1,5 @@
+"""Tests for romanized input detection and transliteration normalization."""
+
 import unittest
 from unittest.mock import patch
 

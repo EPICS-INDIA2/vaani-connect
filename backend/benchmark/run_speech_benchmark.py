@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Benchmark Vaani Connect speech translation API with local audio fixtures."""
+"""Benchmark Vaani Connect speech translation API with local audio fixtures.
+
+This is not runtime app code. It uploads prepared audio files to a running
+backend so students can measure ASR, translation, and TTS latency.
+"""
 
 from __future__ import annotations
 
